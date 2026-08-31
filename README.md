@@ -1,5 +1,13 @@
 # pymgarch
 
+[![CI/CD](https://github.com/marwinsteiner/pymgarch/actions/workflows/python-publish.yml/badge.svg)](https://github.com/marwinsteiner/pymgarch/actions/workflows/python-publish.yml)
+[![PyPI](https://img.shields.io/pypi/v/pymgarch)](https://pypi.org/project/pymgarch/)
+[![Python](https://img.shields.io/pypi/pyversions/pymgarch)](https://pypi.org/project/pymgarch/)
+[![Downloads](https://static.pepy.tech/badge/pymgarch)](https://pepy.tech/project/pymgarch)
+[![codecov](https://codecov.io/gh/marwinsteiner/pymgarch/branch/main/graph/badge.svg)](https://codecov.io/gh/marwinsteiner/pymgarch)
+[![Docs](https://readthedocs.org/projects/pymgarch/badge/?version=latest)](https://pymgarch.readthedocs.io)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Multivariate GARCH for Python: DCC, ADCC, and CCC correlation dynamics built
 on top of [arch](https://github.com/bashtage/arch) univariate marginals,
 validated against R's rmgarch/tsmarch.

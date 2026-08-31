@@ -17,6 +17,7 @@ dependencies = [
 numba = ["numba>=0.59"]
 
 [project.urls]
+Documentation = "https://pymgarch.readthedocs.io"
 Repository = "https://github.com/marwinsteiner/pymgarch"
 Issues = "https://github.com/marwinsteiner/pymgarch/issues"
 

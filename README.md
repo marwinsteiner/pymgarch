@@ -69,30 +69,11 @@ stage-1 estimation error. Correlation targets are held fixed (same
 approximation rmgarch makes). If the stacked system is singular the library
 falls back to a stage-2-only sandwich and says so in `summary()`.
 
-## Validation
-
-`scripts/make_fixtures.R` fits rmgarch on a pinned dataset (percent returns
-of five dji30ret constituents) and exports parameters, likelihoods, sigma and
-residual paths, and forecasts to JSON. The test suite then evaluates
-pymgarch's likelihood at R's fitted parameters, on R's own volatility paths,
-and requires agreement, isolating the correlation math from optimizer and
-initialization differences. Run the script once with R installed to enable
-these tests locally; they skip otherwise.
-
 ## Roadmap
 
 - v0.2: GO-GARCH via ICA
 - v0.3: copula-GARCH (Gaussian and Student-t copulas)
 - v0.4: composite likelihood for large cross-sections, scalar/diagonal BEKK
-
-## Scope notes
-
-- No look-ahead anywhere: all filtered and fitted quantities at time t use
-  information through t-1 in the recursions, and forecasts condition on the
-  sample end.
-- Unbalanced panels and non-Constant/Zero mean specs for filtering and
-  simulation are not supported in v0.1.
-- Forecasting from a filtered result lands in v0.2.
 
 ## License
 

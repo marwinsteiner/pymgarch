@@ -28,7 +28,9 @@ uspec <- multispec(replicate(
 
 fit_one <- function(spec) {
   fit <- dccfit(spec, data = X)
-  fc <- dccforecast(fit, n.ahead = 10)
+  # n.ahead = 1: rmgarch does not support multi-step aDCC forecasts, and the
+  # Python tests only consume the (deterministic) one-step correlation anyway
+  fc <- dccforecast(fit, n.ahead = 1)
   rc <- rcor(fit)
   list(
     stage2 = as.list(coef(fit, type = "dcc")),

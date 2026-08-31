@@ -57,9 +57,10 @@ def _eval_at_r_params(entry, asymmetric, studentt):
 
 
 class TestLevel1LikelihoodAtRParams:
-    # Tolerance covers convention differences in Q_1 initialization only;
-    # tighten after first successful fixture run if the gap is smaller.
-    LL_ATOL = 1.0
+    # Measured gaps on rmgarch 1.4-2 fixtures are below 0.02 on likelihoods
+    # of magnitude ~10,000 (relative ~2e-6); 0.05 leaves headroom for future
+    # rmgarch versions without hiding real convention drift.
+    LL_ATOL = 0.05
 
     @pytest.mark.parametrize(
         "key,asym,st",
@@ -90,8 +91,12 @@ class TestLevel2FullPipeline:
 
         returns = pd.read_csv(CSV)
         res = DCC().fit(returns, compute_se=False)
+        # the substantive check: our end-to-end optimum must be at least as
+        # good as rmgarch's (measured: ours beats R's by ~1.2 log-lik points)
+        assert res.loglikelihood > float(fx["dcc_norm"]["loglik"]) - 1.0
+        # parameter proximity is a weak assertion by design: the DCC surface
+        # is flat in (a, b) near the optimum and the arch/rugarch marginals
+        # differ slightly, so identical parameters are not expected
         s2 = fx["dcc_norm"]["stage2"]
         assert res.params["alpha"] == pytest.approx(float(s2["dcca1"]), abs=0.02)
-        assert res.params["beta"] == pytest.approx(float(s2["dccb1"]), abs=0.05)
-        # our optimum should not be materially worse than R's
-        assert res.loglikelihood > float(fx["dcc_norm"]["loglik"]) - 5.0
+        assert res.params["beta"] == pytest.approx(float(s2["dccb1"]), abs=0.10)

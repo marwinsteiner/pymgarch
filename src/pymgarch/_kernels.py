@@ -86,8 +86,8 @@ def dcc_recursion(eps, a, b, g, omega, qinit):
                 for j in range(N):
                     x = omega[i, j] + a * e[i] * e[j] + b * Q[i, j]
                     if g > 0.0:
-                        ni = e[i] if e[i] < 0.0 else 0.0
-                        nj = e[j] if e[j] < 0.0 else 0.0
+                        ni = min(0.0, e[i])
+                        nj = min(0.0, e[j])
                         x += g * ni * nj
                     Q[i, j] = x
         for i in range(N):

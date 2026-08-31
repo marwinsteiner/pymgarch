@@ -38,7 +38,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = [".", "src"]
+pythonpath = [".", "src", "tests"]
 addopts = "-v --strict-markers --import-mode=importlib"
 markers = [
     "slow: long-running statistical tests",

@@ -93,14 +93,14 @@ class MarginalSet:
     # -- construction ------------------------------------------------------
 
     @classmethod
-    def from_returns(cls, returns: pd.DataFrame, spec: UnivariateSpec) -> "MarginalSet":
+    def from_returns(cls, returns: pd.DataFrame, spec: UnivariateSpec) -> MarginalSet:
         results = [spec.fit(returns[col]) for col in returns.columns]
         return cls(results, [str(c) for c in returns.columns])
 
     @classmethod
     def from_results(
         cls, results: list[ARCHModelResult], names: list[str] | None = None
-    ) -> "MarginalSet":
+    ) -> MarginalSet:
         for r in results:
             if not isinstance(r, ARCHModelResult):
                 raise TypeError(
@@ -144,8 +144,16 @@ class MarginalSet:
         resids = np.asarray(model.resids(mean_p), dtype=float)
         vol = model.volatility
         sigma2 = np.empty_like(resids)
-        backcast = vol.backcast(resids)
-        var_bounds = vol.variance_bounds(resids)
+        # arch computes the backcast and variance bounds once per fit and
+        # holds them fixed during optimization; reuse the stored values so
+        # perturbed evaluations stay consistent with the objective arch
+        # actually maximized (scores at the fitted params are then ~0).
+        backcast = getattr(model, "_backcast", None)
+        if backcast is None:
+            backcast = vol.backcast(resids)
+        var_bounds = getattr(model, "_var_bounds", None)
+        if var_bounds is None:
+            var_bounds = vol.variance_bounds(resids)
         vol.compute_variance(vol_p, resids, sigma2, backcast, var_bounds)
         llt = np.asarray(
             model.distribution.loglikelihood(dist_p, resids, sigma2, individual=True),
@@ -188,7 +196,13 @@ class MarginalSet:
         vol = model.volatility
         vol_p = params[n_mean : n_mean + n_vol]
         sigma2 = np.empty_like(resids)
-        backcast = vol.backcast(resids)
+        # initialize the recursion from the fitted model's stored backcast
+        # (part of the fitted state), so filtering the training sample
+        # reproduces the fitted path exactly; bounds depend on sample length
+        # and are recomputed for the new series.
+        backcast = getattr(model, "_backcast", None)
+        if backcast is None or np.ndim(backcast) > 0:
+            backcast = vol.backcast(resids)
         var_bounds = vol.variance_bounds(resids)
         vol.compute_variance(vol_p, resids, sigma2, backcast, var_bounds)
         return resids, np.sqrt(sigma2)

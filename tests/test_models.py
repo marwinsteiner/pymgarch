@@ -1,10 +1,9 @@
 import numpy as np
 import pytest
+from conftest import TRUE_DCC
 
 from pymgarch import ADCC, CCC, DCC
 from pymgarch.estimation import ParamLayout, stage2_llt
-
-from conftest import TRUE_DCC
 
 
 class TestDCC:

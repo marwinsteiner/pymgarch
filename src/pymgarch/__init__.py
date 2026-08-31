@@ -17,6 +17,6 @@ __all__ = [
     "MGARCHResult",
     "MarginalSet",
     "UnivariateSpec",
-    "simulate_dcc",
     "__version__",
+    "simulate_dcc",
 ]

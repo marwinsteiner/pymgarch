@@ -228,7 +228,7 @@ class MGARCHResult:
 
     # -- filtering ---------------------------------------------------------
 
-    def filter(self, returns) -> "MGARCHResult":
+    def filter(self, returns) -> MGARCHResult:
         """Apply fitted parameters to a new return sample (no re-estimation).
 
         Uses the fitted correlation targets Sbar/Nbar and Q_1 = Sbar.

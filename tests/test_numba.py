@@ -15,7 +15,7 @@ def test_kernels_are_jitted():
 def test_jitted_matches_python():
     rng = np.random.default_rng(0)
     eps = rng.standard_normal((200, 3))
-    Sbar, Nbar = correlation_targets(eps)
+    Sbar, _ = correlation_targets(eps)
     omega = 0.05 * Sbar
     args = (eps, 0.04, 0.91, 0.0, omega, Sbar.copy())
     flag_j, ld_j, q_j, R_j, ql_j = _kernels.dcc_recursion(*args)

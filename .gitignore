@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.python-version
+
+# Generated version file
+src/pymgarch/_version.py
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+coverage.xml
+
+# Docs build
+docs/_build/
+
+# IDE
+.idea/
+.vscode/
+
+# Local project settings
+.claude/settings.local.json
+uv.lock.orig

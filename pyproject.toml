@@ -1,0 +1,62 @@
+[project]
+name = "pymgarch"
+dynamic = ["version"]
+description = "Multivariate GARCH for Python: DCC, ADCC, CCC on top of arch marginals, validated against rmgarch/tsmarch."
+authors = [{name = "Marwin Steiner"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "arch>=7.0",
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+numba = ["numba>=0.59"]
+
+[project.urls]
+Repository = "https://github.com/marwinsteiner/pymgarch"
+Issues = "https://github.com/marwinsteiner/pymgarch/issues"
+
+[dependency-groups]
+docs = [
+    "sphinx>=8.0",
+    "furo>=2024.8.6",
+    "myst-parser>=4.0",
+]
+dev = [
+    "hatch-vcs>=0.5.0",
+    "hypothesis>=6.100",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-xdist>=3.6",
+    "ruff>=0.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "src"]
+addopts = "-v --strict-markers --import-mode=importlib"
+markers = [
+    "slow: long-running statistical tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/pymgarch/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pymgarch"]

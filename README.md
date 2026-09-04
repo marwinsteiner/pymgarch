@@ -72,16 +72,17 @@ res = mg.DCC().fit(returns, marginals=fitted)
 | ADCC (Cappiello-Engle-Sheppard 2006) | Gaussian, Student-t | two-stage QML, PSD-constrained targeting |
 | GO-GARCH (van der Weide 2002) | Gaussian or t factors | fastICA rotation + univariate factor fits |
 | Copula-GARCH (Patton 2006) | Gaussian or t copula, static or DCC | two-stage QML, parametric or empirical margins |
+| Scalar/diagonal BEKK (Engle-Kroner 1995) | Gaussian | direct QML with variance targeting |
+
+For large cross-sections, DCC and ADCC accept `method="composite"` (Engle-
+Shephard-Sheppard pairwise composite likelihood), replacing the N-dimensional
+likelihood with O(N) bivariate recursions.
 
 Standard errors are Engle-Sheppard (2001) two-stage sandwich estimates: the
 marginal and correlation scores are stacked so stage-2 uncertainty reflects
 stage-1 estimation error. Correlation targets are held fixed (same
 approximation rmgarch makes). If the stacked system is singular the library
 falls back to a stage-2-only sandwich and says so in `summary()`.
-
-## Roadmap
-
-- v0.4: composite likelihood for large cross-sections, scalar/diagonal BEKK
 
 ## License
 

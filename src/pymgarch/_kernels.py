@@ -108,6 +108,41 @@ def dcc_recursion(eps, a, b, g, omega, qinit):
 
 
 @njit(cache=True)
+def bekk_recursion(u, avec, bvec, C, hinit):
+    """Hadamard-form diagonal BEKK on demeaned returns u (T, N):
+
+    H_t = C + (a a') o (u_{t-1} u_{t-1}') + (b b') o H_{t-1},  H_1 = hinit,
+
+    with o the elementwise product; avec = a * ones gives scalar BEKK.
+    Returns (flag, llt, Hpath, H_last); flag != 0 on numerical failure.
+    llt is the per-obs Gaussian log-likelihood of u_t given H_t.
+    """
+    T, N = u.shape
+    llt = np.empty(T)
+    Hpath = np.empty((T, N, N))
+    H = hinit.copy()
+    L = np.zeros((N, N))
+    log2pi = np.log(2.0 * np.pi)
+    for t in range(T):
+        if t > 0:
+            up = u[t - 1]
+            for i in range(N):
+                for j in range(N):
+                    H[i, j] = (
+                        C[i, j]
+                        + avec[i] * avec[j] * up[i] * up[j]
+                        + bvec[i] * bvec[j] * H[i, j]
+                    )
+        ok = _chol_lower(H, L)
+        if ok != 0:
+            return 1, llt, Hpath, H
+        ld, qd = _logdet_quad(L, u[t])
+        llt[t] = -0.5 * (N * log2pi + ld + qd)
+        Hpath[t, :, :] = H
+    return 0, llt, Hpath, H
+
+
+@njit(cache=True)
 def garch_forward(vol_params, p, o, q, z, u_lags, s2_lags):
     """Simulate a GARCH/GJR variance recursion forward through shocks z.
 

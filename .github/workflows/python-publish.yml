@@ -6,6 +6,8 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:  # no branches filter: stacked PRs (base != main) also get CI
+  workflow_dispatch:  # release-train dispatches this at the tag it creates
+    # (tags pushed with GITHUB_TOKEN do not fire `on: push` workflows)
 
 permissions:
   contents: read

@@ -72,6 +72,31 @@ fit_gogarch <- function() {
   )
 }
 
+fit_cgarch <- function(time_varying) {
+  cspec <- cgarchspec(
+    uspec,
+    dccOrder = c(1, 1),
+    distribution.model = list(
+      copula = "mvt",
+      method = "Kendall",
+      time.varying = time_varying,
+      transformation = "parametric"
+    )
+  )
+  cfit <- cgarchfit(cspec, data = X)
+  rc <- tryCatch(rcor(cfit), error = function(e) NULL)
+  list(
+    coefs = as.list(coef(cfit)),
+    loglik = likelihood(cfit),
+    sigma = unname(as.matrix(sigma(cfit))),
+    resid = unname(as.matrix(residuals(cfit))),
+    Qbar = tryCatch(unname(cfit@mfit$Qbar), error = function(e) NULL),
+    Rstatic = tryCatch(unname(cfit@mfit$Rt), error = function(e) NULL),
+    Rlast = if (!is.null(rc) && length(dim(rc)) == 3)
+      unname(rc[, , dim(rc)[3]]) else NULL
+  )
+}
+
 out <- list(
   meta = list(
     package = "rmgarch",
@@ -85,7 +110,9 @@ out <- list(
   dcc_t = fit_one(dccspec(uspec, dccOrder = c(1, 1), distribution = "mvt")),
   adcc_norm = fit_one(dccspec(uspec, dccOrder = c(1, 1), model = "aDCC",
                               distribution = "mvnorm")),
-  gogarch_norm = fit_gogarch()
+  gogarch_norm = fit_gogarch(),
+  cgarch_t_dcc = fit_cgarch(TRUE),
+  cgarch_t_static = fit_cgarch(FALSE)
 )
 
 dir.create("tests/fixtures", recursive = TRUE, showWarnings = FALSE)

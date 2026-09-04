@@ -5,6 +5,7 @@ try:
 except ImportError:  # pragma: no cover - before first build
     __version__ = "0.0.0"
 
+from .copula import CopulaGARCH, CopulaGARCHResult
 from .gogarch import GOGARCH, GOGARCHForecast, GOGARCHResult
 from .marginals import MarginalSet, UnivariateSpec
 from .models import ADCC, CCC, DCC, simulate_dcc
@@ -15,6 +16,8 @@ __all__ = [
     "CCC",
     "DCC",
     "GOGARCH",
+    "CopulaGARCH",
+    "CopulaGARCHResult",
     "GOGARCHForecast",
     "GOGARCHResult",
     "MGARCHForecast",

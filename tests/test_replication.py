@@ -116,6 +116,77 @@ class TestGOGARCHLevel1:
         )
 
 
+class TestCopulaLevel1:
+    """Evaluate our t-copula likelihood at rmgarch's fitted parameters.
+
+    Conventions decoded from rmgarch's source and verified numerically to
+    reproduce its likelihood to <1e-3: the copula density is the covariance-
+    standardized-t Sklar density (same as ours), but rmgarch clips the
+    uniforms asymmetrically -- values below 1.5*machine-eps are set to
+    machine-eps and values above 0.99999 to 0.99999 -- which matters a lot
+    on this sample (it contains Black Monday 1987; |eps| reaches 11).
+    pymgarch itself uses a symmetric 1e-12 clip, so the test applies
+    rmgarch's clip explicitly when evaluating at R's parameters.
+    """
+
+    _MACH = 2.220446049250313e-16
+
+    def _rmgarch_u(self, eps):
+        from scipy import stats
+
+        u = stats.norm.cdf(eps)
+        u = np.where(u < 1.5 * self._MACH, self._MACH, u)
+        return np.minimum(u, 0.99999)
+
+    def _marginal_ll(self, sigma, resid):
+        from scipy import stats
+
+        eps = resid / sigma
+        return float((stats.norm.logpdf(eps) - np.log(sigma)).sum())
+
+    def test_static_t_copula_loglik(self, fx):
+        entry = fx.get("cgarch_t_static")
+        if not entry:
+            pytest.skip("cgarch static fixture not available")
+        from pymgarch.copula import _copula_llt_static, _std_t_ppf
+
+        sigma = np.asarray(entry["sigma"], dtype=float)
+        resid = np.asarray(entry["resid"], dtype=float)
+        nu = float(entry["coefs"]["[Joint]mshape"])
+        R = np.asarray(entry["Rstatic"], dtype=float)
+        eta = _std_t_ppf(self._rmgarch_u(resid / sigma), nu)
+        joint = self._marginal_ll(sigma, resid) + float(
+            _copula_llt_static(eta, R, nu).sum()
+        )
+        assert joint == pytest.approx(float(entry["loglik"]), abs=0.05)
+
+    def test_dcc_t_copula_loglik_and_path(self, fx):
+        entry = fx.get("cgarch_t_dcc")
+        if not entry:
+            pytest.skip("cgarch dcc fixture not available")
+        from pymgarch.copula import _std_t_logpdf, _std_t_ppf
+        from pymgarch.correlation import dcc_path
+        from pymgarch.distributions import mvt_llt
+
+        sigma = np.asarray(entry["sigma"], dtype=float)
+        resid = np.asarray(entry["resid"], dtype=float)
+        a = float(entry["coefs"]["[Joint]dcca1"])
+        b = float(entry["coefs"]["[Joint]dccb1"])
+        nu = float(entry["coefs"]["[Joint]mshape"])
+        eta = _std_t_ppf(self._rmgarch_u(resid / sigma), nu)
+        _T, N = eta.shape
+        path = dcc_path(eta, a, b, 0.0, np.cov(eta.T), None)
+        llc = float(
+            (mvt_llt(path.logdet, path.quad, nu, N)
+             - _std_t_logpdf(eta, nu).sum(axis=1)).sum()
+        )
+        joint = self._marginal_ll(sigma, resid) + llc
+        assert joint == pytest.approx(float(entry["loglik"]), abs=0.05)
+        assert np.allclose(
+            path.R[-1], np.asarray(entry["Rlast"], dtype=float), atol=1e-4
+        )
+
+
 @pytest.mark.slow
 class TestLevel2FullPipeline:
     def test_dcc_norm_params_close(self, fx):

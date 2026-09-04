@@ -84,6 +84,38 @@ class TestLevel1LikelihoodAtRParams:
         )
 
 
+class TestGOGARCHLevel1:
+    """Evaluate our GO-GARCH likelihood at R's rotation and factor paths."""
+
+    def test_joint_loglik_matches(self, fx):
+        entry = fx.get("gogarch_norm")
+        if not entry or not entry.get("factor_sigma"):
+            pytest.skip("gogarch fixture (or its factor sigmas) not available")
+        from pymgarch.gogarch import _gogarch_llt
+
+        A = np.asarray(entry["A"], dtype=float)
+        resid = np.asarray(entry["resid"], dtype=float)
+        fsig = np.asarray(entry["factor_sigma"], dtype=float)
+        factors = resid @ np.linalg.inv(A).T
+        llt = _gogarch_llt(factors, fsig, A)
+        assert float(np.sum(llt)) == pytest.approx(
+            float(entry["loglik"]), abs=0.05
+        )
+
+    def test_terminal_covariance_matches(self, fx):
+        entry = fx.get("gogarch_norm")
+        if not entry or not entry.get("factor_sigma"):
+            pytest.skip("gogarch fixture (or its factor sigmas) not available")
+        from pymgarch.gogarch import gogarch_cov_path
+
+        A = np.asarray(entry["A"], dtype=float)
+        fsig = np.asarray(entry["factor_sigma"], dtype=float)
+        H = gogarch_cov_path(A, fsig[-1:])[0]
+        assert np.allclose(
+            H, np.asarray(entry["Hlast"], dtype=float), atol=1e-3
+        )
+
+
 @pytest.mark.slow
 class TestLevel2FullPipeline:
     def test_dcc_norm_params_close(self, fx):

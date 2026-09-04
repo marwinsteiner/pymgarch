@@ -70,6 +70,7 @@ res = mg.DCC().fit(returns, marginals=fitted)
 | CCC (Bollerslev 1990) | Gaussian | closed form given marginals |
 | DCC(1,1) (Engle 2002) | Gaussian, Student-t | two-stage QML, correlation targeting |
 | ADCC (Cappiello-Engle-Sheppard 2006) | Gaussian, Student-t | two-stage QML, PSD-constrained targeting |
+| GO-GARCH (van der Weide 2002) | Gaussian or t factors | fastICA rotation + univariate factor fits |
 
 Standard errors are Engle-Sheppard (2001) two-stage sandwich estimates: the
 marginal and correlation scores are stacked so stage-2 uncertainty reflects
@@ -79,7 +80,6 @@ falls back to a stage-2-only sandwich and says so in `summary()`.
 
 ## Roadmap
 
-- v0.2: GO-GARCH via ICA
 - v0.3: copula-GARCH (Gaussian and Student-t copulas)
 - v0.4: composite likelihood for large cross-sections, scalar/diagonal BEKK
 

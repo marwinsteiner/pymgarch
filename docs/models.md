@@ -40,6 +40,27 @@ The intercept is positive semi-definite iff $a + b + \delta g \le 1$ with
 $\delta = \lambda_{\max}(\bar S^{-1/2} \bar N \bar S^{-1/2})$, which is a
 linear constraint in $(a, b, g)$ and is imposed exactly during estimation.
 
+## GO-GARCH (van der Weide 2002)
+
+Orthogonal-factor model $r_t = \mu + A f_t$ with statistically independent
+factors, each following univariate GARCH with unit unconditional variance.
+The rotation $A$ is recovered by PCA whitening plus fastICA (own
+implementation, logcosh nonlinearity, deterministic sign/permutation
+convention, seedable). The conditional covariance is $H_t = A D_t A'$ with
+$D_t$ the diagonal of factor variances.
+
+Because the factors are independent, the joint likelihood decomposes into
+univariate factor likelihoods plus the constant Jacobian $-T\log|\det A|$,
+so estimation after ICA is exactly $N$ arch fits. ICA is identified only up
+to sign and permutation and requires non-Gaussian factors -- GARCH factors
+are unconditionally leptokurtic, which is what makes this work.
+
+```python
+res = mg.GOGARCH().fit(returns, seed=0)
+res.conditional_covariances
+res.forecast(horizon=10)          # analytic factor forecasts -> A D A'
+```
+
 ## Forecasting
 
 Marginal variance forecasts are delegated to arch. One-step correlations are

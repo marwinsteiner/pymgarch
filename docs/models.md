@@ -61,6 +61,38 @@ res.conditional_covariances
 res.forecast(horizon=10)          # analytic factor forecasts -> A D A'
 ```
 
+## Copula-GARCH (Patton 2006)
+
+Arch marginals, a probability integral transform to uniforms, and a Gaussian
+or Student-t copula with constant or DCC-driven correlation:
+
+$$
+\log f(r_t) = \sum_i \log f_i(r_{it}) + \log c(u_t; R_t).
+$$
+
+Margins are transformed either parametrically (through each marginal's
+fitted arch distribution; Normal and Student-t supported) or empirically
+(ranks, rescaled by $T/(T+1)$). The static t copula estimates $R$ by the
+Kendall-tau transform $\sin(\pi\tau/2)$ and $\nu$ by MLE; dynamic variants
+run the scalar DCC recursion on the copula shocks.
+
+The Student-t copula is parameterized through the covariance-standardized t
+family -- the same copula as the textbook one (copulas are invariant to
+monotone marginal rescaling), but the recursion inputs stay unit-variance
+and the existing DCC kernels apply unchanged. A useful corollary: a Gaussian
+copula with parametric normal margins reproduces plain DCC exactly, which
+the test suite asserts.
+
+```python
+res = mg.CopulaGARCH(copula="t", dynamics="dcc").fit(returns)
+res.copula_correlations               # (T, N, N)
+sim = res.simulate(horizon=10, n_paths=2000, seed=0)
+sim["returns"]                        # (h, n_paths, N) full predictive draws
+```
+
+Copula forecasts are simulation-based (the copula gives full predictive
+distributions, not just second moments); rmgarch makes the same choice.
+
 ## Forecasting
 
 Marginal variance forecasts are delegated to arch. One-step correlations are

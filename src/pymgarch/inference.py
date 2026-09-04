@@ -54,6 +54,50 @@ def _fd_column(func, x: np.ndarray, j: int, h: float) -> np.ndarray:
     raise RuntimeError(f"likelihood not evaluable near fitted parameter {j}")
 
 
+def qml_vcov(llt_fn, psi_hat: np.ndarray) -> dict:
+    """Single-stage QML sandwich A^{-1} B A^{-T} / T from per-obs FD scores.
+
+    For models estimated in one shot on the raw data (BEKK), where there is
+    no marginal stage to stack. llt_fn(psi) returns the per-observation
+    log-likelihood vector, or None if psi is infeasible.
+    """
+    psi_hat = np.asarray(psi_hat, dtype=float)
+    k = psi_hat.shape[0]
+    base = llt_fn(psi_hat)
+    if base is None:
+        raise RuntimeError("likelihood not evaluable at the fitted parameters")
+    T = base.shape[0]
+
+    def wrapped(psi):
+        return llt_fn(psi)
+
+    G = np.empty((T, k))
+    for j in range(k):
+        h = _step(psi_hat[j], _H_SCORE)
+        G[:, j] = _fd_column(wrapped, psi_hat, j, h)
+    B = G.T @ G / T
+
+    def mean_score(psi):
+        out = np.empty(k)
+        for j in range(k):
+            h = _step(psi[j], _H_SCORE)
+            out[j] = float(np.mean(_fd_column(wrapped, psi, j, h)))
+        return out
+
+    A = np.empty((k, k))
+    for j in range(k):
+        h = _step(psi_hat[j], _H_JAC)
+        xp = psi_hat.copy()
+        xm = psi_hat.copy()
+        xp[j] += h
+        xm[j] -= h
+        A[:, j] = (mean_score(xp) - mean_score(xm)) / (2.0 * h)
+
+    Ainv = np.linalg.inv(A)
+    vcov = Ainv @ B @ Ainv.T / T
+    return {"vcov": vcov, "se": np.sqrt(np.diag(vcov)), "method": "qml-robust"}
+
+
 def two_stage_vcov(mset: MarginalSet, fit: Stage2Fit, llt_fn=None) -> dict:
     """Sandwich covariance of the stage-2 parameters.
 

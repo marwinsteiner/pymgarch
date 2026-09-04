@@ -93,6 +93,51 @@ sim["returns"]                        # (h, n_paths, N) full predictive draws
 Copula forecasts are simulation-based (the copula gives full predictive
 distributions, not just second moments); rmgarch makes the same choice.
 
+## Composite likelihood for large N
+
+`DCC(...).fit(returns, method="composite")` replaces the full N-dimensional
+stage-2 likelihood with the mean of bivariate pair likelihoods (Engle,
+Shephard and Sheppard 2008): each pair runs its own 2x2 recursion against
+the corresponding submatrices of the correlation targets, so an objective
+evaluation costs $O(TP)$ with $P$ pairs instead of an $N^3$ Cholesky per
+observation. `pairs="contiguous"` (default, $P = N-1$) follows the paper's
+recommendation for large cross-sections; `pairs="all"` uses every pair.
+
+Point estimates are consistent; standard errors use the composite scores in
+the two-stage sandwich (Godambe information); the reported joint likelihood
+is still evaluated on the full model so results stay comparable across
+methods. There is no packaged reference implementation in R or Python for
+this estimator (it exists in Sheppard's MATLAB MFE toolbox), so validation
+is against the full-likelihood estimator on moderate N plus simulation
+recovery.
+
+## Scalar and diagonal BEKK (Engle and Kroner 1995)
+
+The one model here that does not decompose into marginals plus correlation:
+the covariance is modeled directly on demeaned returns,
+
+$$
+H_t = C + (a a') \circ (u_{t-1} u_{t-1}') + (b b') \circ H_{t-1},
+$$
+
+the Hadamard form of diagonal BEKK ($A = \mathrm{diag}(a)$); scalar BEKK
+constrains $a$ to a common value. Variance targeting sets
+$C = \Sigma \circ (1 - aa' - bb')$ with $\Sigma$ the sample covariance,
+leaving only $(a, b)$ to estimate by Gaussian QML, with per-asset
+$a_i^2 + b_i^2 < 1$ constraints (which imply pairwise stationarity by
+Cauchy-Schwarz) and an explicit PSD check on $C$. Forecasts are closed form:
+$E[H_{T+h}] = C + (aa' + bb') \circ E[H_{T+h-1}]$.
+
+```python
+res = mg.BEKK("diagonal").fit(returns)
+res.conditional_covariances
+res.forecast(horizon=10)["covariances"]
+```
+
+Validation note: no maintained R reference exists for BEKK (mgarchBEKK is
+dead), so the test suite relies on simulation-recovery and closed-form
+forecast checks rather than cross-language fixtures.
+
 ## Forecasting
 
 Marginal variance forecasts are delegated to arch. One-step correlations are

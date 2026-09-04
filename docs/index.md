@@ -15,6 +15,7 @@ rmgarch's fitted parameters and likelihoods.
 :maxdepth: 2
 
 quickstart
+examples
 models
 inference
 api

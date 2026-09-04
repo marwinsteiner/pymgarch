@@ -5,8 +5,7 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
-  pull_request:
-    branches: [main]
+  pull_request:  # no branches filter: stacked PRs (base != main) also get CI
 
 permissions:
   contents: read

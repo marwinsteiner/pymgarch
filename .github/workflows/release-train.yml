@@ -93,5 +93,12 @@ jobs:
 
           gh workflow run python-publish.yml --repo "$REPO" --ref "$MS_TITLE"
 
+          # close the milestone's remaining open issues (the scope tickets),
+          # then the milestone itself
+          for ISSUE in $(gh issue list --repo "$REPO" --milestone "$MS_TITLE" \
+              --state open --json number --jq '.[].number'); do
+            gh issue close "$ISSUE" --repo "$REPO" \
+              --comment "Shipped in $MS_TITLE (PR #$PR)."
+          done
           gh api -X PATCH "repos/$REPO/milestones/$MS_NUMBER" -f state=closed
-          echo "Released $MS_TITLE from PR #$PR and dispatched the deploy pipeline."
+          echo "Released $MS_TITLE from PR #$PR, closed its issues, and dispatched the deploy pipeline."

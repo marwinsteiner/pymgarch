@@ -12,6 +12,8 @@ from .gogarch import GOGARCH, GOGARCHForecast, GOGARCHResult
 from .marginals import MarginalSet, UnivariateSpec
 from .models import ADCC, CCC, DCC, simulate_dcc
 from .results import MGARCHForecast, MGARCHResult
+from .risk import expected_shortfall, value_at_risk, var_coverage
+from .rolling import RollResult, roll
 
 __all__ = [
     "ADCC",
@@ -28,9 +30,14 @@ __all__ = [
     "MGARCHForecast",
     "MGARCHResult",
     "MarginalSet",
+    "RollResult",
     "UnivariateSpec",
     "__version__",
     "dcc_test",
+    "expected_shortfall",
+    "roll",
     "simulate_bekk",
     "simulate_dcc",
+    "value_at_risk",
+    "var_coverage",
 ]

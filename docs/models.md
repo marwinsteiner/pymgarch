@@ -172,6 +172,22 @@ simulation method does not.
   the fitted forecast when filtering the training sample).
 - `CCC(dist="t")` -- Student-t CCC with $\nu$ by one-dimensional MLE.
 
+## Rolling estimation and risk metrics
+
+- `pymgarch.roll(model, returns, window, refit_every, expanding, n_jobs)` --
+  moving-window refits with out-of-sample one-step covariance forecasts for
+  every model (rmgarch `dccroll`/`gogarchroll` parity). A filtered path IS
+  the sequence of one-step-ahead conditional covariances, so each block is
+  one fit plus one filter pass; blocks parallelize via joblib. The result
+  carries realized returns, forecast paths, per-refit parameters, and a
+  `coverage_test()` shortcut.
+- `pymgarch.value_at_risk(result, weights, alpha, horizon, method)` /
+  `expected_shortfall(...)` -- positive-loss VaR/ES per horizon, by
+  simulation through the fitted model (default; exact for t and copula
+  tails) or analytically on the covariance forecast (Gaussian/Student-t).
+- `pymgarch.var_coverage(losses, var, alpha)` -- Kupiec unconditional
+  coverage, Christoffersen independence, and conditional coverage backtests.
+
 ## Reported likelihood
 
 `loglikelihood` is the joint likelihood of the returns under the stage-2

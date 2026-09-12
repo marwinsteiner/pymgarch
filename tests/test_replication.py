@@ -187,6 +187,21 @@ class TestCopulaLevel1:
         )
 
 
+class TestDCCTestDecision:
+    """rmgarch's DCCtest deviates from Engle-Sheppard 2001 (no joint
+    whitening, reversed-regression algebra), so statistics are not
+    comparable; assert the accept/reject decision agrees at 5%."""
+
+    def test_same_decision_as_rmgarch(self, fx):
+        entry = fx.get("dcctest")
+        if not entry:
+            pytest.skip("dcctest fixture not available")
+        from pymgarch import dcc_test
+
+        ours = dcc_test(pd.read_csv(CSV))
+        assert (ours.pvalue < 0.05) == (float(entry["p.value"]) < 0.05)
+
+
 @pytest.mark.slow
 class TestLevel2FullPipeline:
     def test_dcc_norm_params_close(self, fx):

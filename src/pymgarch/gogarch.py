@@ -171,6 +171,97 @@ class GOGARCHResult:
             n_paths if method == "simulation" else None,
         )
 
+    # -- simulation of future return paths ---------------------------------
+
+    def simulate(
+        self, horizon: int, n_paths: int = 1000, seed: int | None = None
+    ) -> dict:
+        """Simulate future return paths: independent factor GARCH forward
+        recursions mapped through r = mu + A f.
+
+        Returns {"returns": (h, n_paths, N), "factor_variances": same shape}.
+        """
+        rng = np.random.default_rng(seed)
+        K = self.mset.nassets
+        f = np.empty((horizon, n_paths, K))
+        fvar = np.empty((horizon, n_paths, K))
+        for i in range(K):
+            fam = self.mset.garch_family(i)
+            if fam is None:
+                raise NotImplementedError("simulate() needs GARCH/GJR factors")
+            vol_p, p, o, q = fam
+            u_lags, s2_lags = self.mset.sim_state(i)
+            z = rng.standard_normal((horizon, n_paths))
+            u, sig2 = garch_forward(
+                vol_p,
+                p,
+                o,
+                q,
+                z,
+                np.tile(u_lags[:, None], (1, n_paths)),
+                np.tile(s2_lags[:, None], (1, n_paths)),
+            )
+            f[:, :, i] = u
+            fvar[:, :, i] = sig2
+        rets = self.mu[None, None, :] + np.einsum("hmk,nk->hmn", f, self.A)
+        return {"returns": rets, "factor_variances": fvar}
+
+    # -- news impact --------------------------------------------------------
+
+    def news_impact(
+        self,
+        pair: tuple[int, int] = (0, 1),
+        factors: tuple[int, int] = (0, 1),
+        kind: str = "covariance",
+        grid: np.ndarray | None = None,
+    ) -> dict:
+        """News-impact surface of the one-step covariance/correlation of the
+        asset `pair` over shocks to the factor `factors`; unshocked factors
+        sit at their unconditional variance.
+        """
+        i, j = pair
+        k, m = factors
+        if grid is None:
+            grid = np.linspace(-4.0, 4.0, 41)
+        K = self.mset.nassets
+        base = np.empty(K)
+        fams = []
+        for fidx in range(K):
+            fam = self.mset.garch_family(fidx)
+            if fam is None:
+                raise NotImplementedError("news impact needs GARCH/GJR factors")
+            fams.append(fam)
+            vol_p, p, o, _q = fam
+            rho = float(vol_p[1:].sum() - 0.5 * vol_p[1 + p : 1 + p + o].sum())
+            base[fidx] = vol_p[0] / (1.0 - rho)
+
+        def ni_var(fidx: int, shock: float) -> float:
+            vol_p, p, o, q = fams[fidx]
+            u = shock * np.sqrt(base[fidx])
+            v = vol_p[0] + vol_p[1] * u * u if p else vol_p[0]
+            if o and u < 0.0:
+                v += vol_p[1 + p] * u * u
+            for lag in range(q):
+                v += vol_p[1 + p + o + lag] * base[fidx]
+            return v
+
+        z = np.empty((grid.shape[0], grid.shape[0]))
+        d = base.copy()
+        for gi, x in enumerate(grid):
+            for gj, y in enumerate(grid):
+                d[:] = base
+                d[k] = ni_var(k, x)
+                if m != k:
+                    d[m] = ni_var(m, y)
+                H = (self.A * d) @ self.A.T
+                if kind == "covariance":
+                    z[gi, gj] = H[i, j]
+                elif kind == "correlation":
+                    z[gi, gj] = H[i, j] / np.sqrt(H[i, i] * H[j, j])
+                else:
+                    raise ValueError("kind must be 'correlation' or 'covariance'")
+        return {"x": grid.copy(), "y": grid.copy(), "z": z}
+
     # -- filtering ---------------------------------------------------------
 
     def filter(self, returns) -> GOGARCHResult:

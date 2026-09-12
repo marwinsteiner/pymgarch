@@ -112,7 +112,11 @@ out <- list(
                               distribution = "mvnorm")),
   gogarch_norm = fit_gogarch(),
   cgarch_t_dcc = fit_cgarch(TRUE),
-  cgarch_t_static = fit_cgarch(FALSE)
+  cgarch_t_static = fit_cgarch(FALSE),
+  dcctest = tryCatch({
+    dt <- DCCtest(X, n.lags = 1)
+    list(statistic = dt$statistic, p.value = dt$p.value)
+  }, error = function(e) NULL)
 )
 
 dir.create("tests/fixtures", recursive = TRUE, showWarnings = FALSE)

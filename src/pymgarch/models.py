@@ -144,22 +144,40 @@ class ADCC(_DCCBase):
 
 
 class CCC:
-    """Bollerslev (1990) constant conditional correlation (Gaussian)."""
+    """Bollerslev (1990) constant conditional correlation.
+
+    dist="t" adds a multivariate Student-t likelihood with the degrees of
+    freedom estimated by one-dimensional MLE at the fixed correlation.
+    """
 
     def __init__(self, dist: str = "norm"):
-        if _normalize_dist(dist) != "norm":
-            raise NotImplementedError("CCC supports the Gaussian likelihood only")
-        self.dist = "norm"
+        self.dist = _normalize_dist(dist)
 
     def fit(self, returns, marginals=None) -> MGARCHResult:
+        from scipy.optimize import minimize_scalar
+
         mset, names, index = _build_marginals(returns, marginals)
         eps = mset.std_resid
         Sbar, Nbar = correlation_targets(eps)
-        llt2, logdet, quad, R, q_last = _constant_corr_eval(eps, Sbar, "norm", None)
+        nu = None
+        psi = np.empty(0)
+        psi_names: list[str] = []
+        if self.dist == "t":
+            res = minimize_scalar(
+                lambda v: -float(
+                    np.sum(_constant_corr_eval(eps, Sbar, "t", v)[0])
+                ),
+                bounds=(2.1, 300.0),
+                method="bounded",
+            )
+            nu = float(res.x)
+            psi = np.array([nu])
+            psi_names = ["nu"]
+        llt2, logdet, quad, R, q_last = _constant_corr_eval(eps, Sbar, self.dist, nu)
         llt = llt2 - np.sum(np.log(mset.sigma), axis=1)
         return MGARCHResult(
             model="CCC",
-            dist="norm",
+            dist=self.dist,
             names=names,
             index=index,
             sigma=mset.sigma,
@@ -169,8 +187,8 @@ class CCC:
             quad=quad,
             Sbar=Sbar,
             Nbar=Nbar,
-            psi=np.empty(0),
-            psi_names=[],
+            psi=psi,
+            psi_names=psi_names,
             layout=None,
             loglikelihood=float(np.sum(llt)),
             llt=llt,

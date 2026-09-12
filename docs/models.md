@@ -152,6 +152,26 @@ propagate the exact recursions; ADCC requires them. The analytic covariance
 assembly $\hat H = \hat D \hat R \hat D$ ignores a Jensen gap that the
 simulation method does not.
 
+## Diagnostics and post-estimation tools
+
+- `pymgarch.dcc_test(returns)` -- the Engle-Sheppard (2001) test of
+  constant conditional correlation: residuals are jointly whitened by
+  $\bar R^{-1/2}$ and stacked off-diagonal outer products are regressed on a
+  constant and lags; the statistic is $\chi^2(\text{lags}+1)$ under the
+  null. A small p-value motivates DCC-family dynamics. (rmgarch's `DCCtest`
+  deviates from the paper; pymgarch follows the paper, and the replication
+  suite asserts decision agreement.)
+- `result.news_impact(pair, kind)` -- one-step correlation/covariance
+  response surfaces over shock grids (rmgarch `nisurface`); GO-GARCH exposes
+  factor-shock surfaces.
+- `result.simulate(horizon, n_paths)` -- future return-path draws from the
+  fitted terminal state for DCC/ADCC/CCC and GO-GARCH (`dccsim` parity);
+  the copula result already had this.
+- Filtered results now forecast: `fit.filter(new_data).forecast(h)` iterates
+  the variance expectation from the filtered terminal state (identical to
+  the fitted forecast when filtering the training sample).
+- `CCC(dist="t")` -- Student-t CCC with $\nu$ by one-dimensional MLE.
+
 ## Reported likelihood
 
 `loglikelihood` is the joint likelihood of the returns under the stage-2

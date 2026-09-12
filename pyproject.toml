@@ -3,14 +3,14 @@ name = "pymgarch"
 dynamic = ["version"]
 description = "Multivariate GARCH for Python: DCC, ADCC, CCC on top of arch marginals, validated against rmgarch/tsmarch."
 authors = [{name = "Marwin Steiner"}]
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Financial and Insurance Industry",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",

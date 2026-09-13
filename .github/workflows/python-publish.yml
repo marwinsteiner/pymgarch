@@ -52,12 +52,21 @@ jobs:
       contents: write
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # shallow fetch peels annotated tags: gh would then
+                        # fall back to the merge-commit message as notes
 
     - name: Create GitHub Release
-      # --notes-from-tag publishes the annotated tag message as the release
-      # notes (--generate-notes only summarises PRs, which direct pushes lack);
-      # explicit --title keeps the release title to the bare tag name
-      run: gh release create "${{ github.ref_name }}" --notes-from-tag --title "${{ github.ref_name }}"
+      # publish the annotated tag message as the release notes, read
+      # explicitly from the tag object (robust against gh's local-git
+      # fallback behavior); explicit --title keeps the bare tag name
+      run: |
+        git tag -l --format='%(contents)' "${{ github.ref_name }}" > /tmp/notes
+        if [ ! -s /tmp/notes ]; then
+          echo "::error::tag ${{ github.ref_name }} has no annotation message"
+          exit 1
+        fi
+        gh release create "${{ github.ref_name }}" --notes-file /tmp/notes --title "${{ github.ref_name }}"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

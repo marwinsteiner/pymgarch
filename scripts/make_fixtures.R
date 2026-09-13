@@ -46,6 +46,32 @@ fit_one <- function(spec) {
   )
 }
 
+fit_gogarch <- function() {
+  gspec <- gogarchspec(
+    mean.model = list(model = "constant"),
+    variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+    distribution.model = "mvnorm",
+    ica = "fastica"
+  )
+  set.seed(42)  # rmgarch's fastICA has random initialization
+  gfit <- gogarchfit(gspec, data = X)
+  rc <- rcov(gfit)
+  # factor sigmas live on the internal multifit; access defensively so a
+  # future rmgarch refactor degrades the fixture rather than killing the run
+  fsig <- tryCatch(
+    unname(as.matrix(sigma(gfit@mfit$ufit))),
+    error = function(e) NULL
+  )
+  list(
+    A = unname(as.matrix(gfit@mfit$A)),
+    resid = unname(as.matrix(residuals(gfit))),
+    factor_sigma = fsig,
+    factor_coefs = unname(coef(gfit)),
+    loglik = likelihood(gfit),
+    Hlast = unname(rc[, , dim(rc)[3]])
+  )
+}
+
 out <- list(
   meta = list(
     package = "rmgarch",
@@ -58,7 +84,8 @@ out <- list(
   dcc_norm = fit_one(dccspec(uspec, dccOrder = c(1, 1), distribution = "mvnorm")),
   dcc_t = fit_one(dccspec(uspec, dccOrder = c(1, 1), distribution = "mvt")),
   adcc_norm = fit_one(dccspec(uspec, dccOrder = c(1, 1), model = "aDCC",
-                              distribution = "mvnorm"))
+                              distribution = "mvnorm")),
+  gogarch_norm = fit_gogarch()
 )
 
 dir.create("tests/fixtures", recursive = TRUE, showWarnings = FALSE)

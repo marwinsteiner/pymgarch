@@ -18,6 +18,7 @@ plain DCC model exactly.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -26,7 +27,7 @@ from scipy import stats
 from scipy.optimize import minimize
 
 from .correlation import cov2cor, dcc_path, one_step_q
-from .distributions import mvnorm_llt, mvt_llt
+from .distributions import mvnorm_llt, mvt_llt, sample_standardized
 from .estimation import ParamLayout
 from .inference import two_stage_vcov
 from .marginals import MarginalSet
@@ -87,6 +88,15 @@ def pit_empirical(eps: np.ndarray) -> np.ndarray:
     return u
 
 
+def _pd_correlation(R: np.ndarray) -> np.ndarray:
+    """Eigenvalue-clip a correlation-like matrix to be PD (unit diagonal)."""
+    vals, vecs = np.linalg.eigh(R)
+    if vals[0] <= 1e-10:
+        vals = np.clip(vals, 1e-10, None)
+        R = cov2cor((vecs * vals) @ vecs.T)
+    return R
+
+
 def kendall_correlation(eps: np.ndarray) -> np.ndarray:
     """R = sin(pi/2 * tau) pairwise, eigenvalue-clipped to be PD.
 
@@ -99,32 +109,97 @@ def kendall_correlation(eps: np.ndarray) -> np.ndarray:
         for j in range(i + 1, N):
             tau = stats.kendalltau(eps[:, i], eps[:, j]).statistic
             R[i, j] = R[j, i] = np.sin(0.5 * np.pi * tau)
-    vals, vecs = np.linalg.eigh(R)
-    if vals[0] <= 1e-10:
-        vals = np.clip(vals, 1e-10, None)
-        R = cov2cor((vecs * vals) @ vecs.T)
-    return R
+    return _pd_correlation(R)
+
+
+_TINY = float(np.finfo(float).tiny)
+
+
+def _eta_parametric(
+    mset: MarginalSet, eps: np.ndarray, copula: str, nu: float | None
+) -> np.ndarray:
+    """Tail-accurate copula shocks from standardized residuals.
+
+    Composes the marginal CDF with the copula quantile through survival
+    functions: for x >= 0 it evaluates -ppf(cdf(-x)), so both tails keep
+    accurate quantiles. A plain cdf -> clip -> ppf round trip saturates the
+    upper tail in float64 and a 1e-12 clip truncates |eta| near 7.03,
+    materially distorting crash-scale observations (and breaking the
+    Gaussian-copula == DCC identity on such data). Both supported marginal
+    and copula distributions are symmetric, which the reflection exploits;
+    Gaussian copula over Normal margins short-circuits to eta = eps exactly.
+    """
+    if copula == "gaussian":
+        def cop_ppf(p: np.ndarray) -> np.ndarray:
+            return stats.norm.ppf(p)
+    else:
+        def cop_ppf(p: np.ndarray) -> np.ndarray:
+            return _std_t_ppf(p, nu)
+
+    eta = np.empty_like(eps)
+    for i in range(mset.nassets):
+        res = mset.results[i]
+        dist_name = type(res.model.distribution).__name__
+        x = eps[:, i]
+        if dist_name == "Normal":
+            if copula == "gaussian":
+                eta[:, i] = x  # exact identity, no round trip
+                continue
+
+            def cdf(v: np.ndarray) -> np.ndarray:
+                return stats.norm.cdf(v)
+
+        elif dist_name == "StudentsT":
+            nu_i = float(np.asarray(res.params)[-1])
+
+            def cdf(v: np.ndarray, nu_i: float = nu_i) -> np.ndarray:
+                return _std_t_cdf(v, nu_i)
+
+        else:
+            raise NotImplementedError(
+                f"parametric PIT not implemented for arch distribution "
+                f"{dist_name!r}; use margins='empirical'"
+            )
+        lo = x < 0.0
+        out = np.empty_like(x)
+        out[lo] = cop_ppf(np.clip(cdf(x[lo]), _TINY, 0.5))
+        out[~lo] = -cop_ppf(np.clip(cdf(-x[~lo]), _TINY, 0.5))
+        eta[:, i] = out
+    return eta
 
 
 # -- copula log-densities --------------------------------------------------
 
 
 def _copula_llt_dynamic(
-    eta: np.ndarray, a: float, b: float, nu: float | None
-) -> np.ndarray | None:
-    """log c(u_t) along a DCC path on the copula shocks eta; None on failure."""
-    T, N = eta.shape
-    Sbar = cov2cor(eta.T @ eta / T)
+    eta: np.ndarray,
+    a: float,
+    b: float,
+    nu: float | None,
+    Sbar: np.ndarray | None = None,
+    return_path: bool = False,
+):
+    """log c(u_t) along a DCC path on the copula shocks eta; None on failure.
+
+    Sbar defaults to the centered covariance of the shocks, matching
+    rmgarch's cgarch targeting (Qbar = cov(Z)); pass a precomputed target to
+    pin it (filter, standard errors) or to avoid recomputation in optimizer
+    loops. With return_path=True, returns (llt, CorrPath).
+    """
+    _, N = eta.shape
+    if Sbar is None:
+        Sbar = np.cov(eta.T)
     path = dcc_path(eta, a, b, 0.0, Sbar, None)
     if not path.ok:
-        return None
+        return (None, path) if return_path else None
     if nu is None:
         joint = mvnorm_llt(path.logdet, path.quad, N)
         margins = stats.norm.logpdf(eta).sum(axis=1)
     else:
         joint = mvt_llt(path.logdet, path.quad, nu, N)
         margins = _std_t_logpdf(eta, nu).sum(axis=1)
-    return joint - margins
+    llt = joint - margins
+    return (llt, path) if return_path else llt
 
 
 def _copula_llt_static(
@@ -160,7 +235,7 @@ class CopulaGARCHResult:
     margins: str  # "parametric" | "empirical"
     names: list[str]
     index: pd.Index
-    mset: MarginalSet
+    mset: MarginalSet | None  # None on filtered results
     u: np.ndarray  # (T, N) PIT values
     eta: np.ndarray  # (T, N) copula shocks at fitted parameters
     R: np.ndarray  # (T, N, N) copula correlation path
@@ -204,7 +279,12 @@ class CopulaGARCHResult:
 
     @property
     def num_params(self) -> int:
-        return self.mset.total_params + len(self.psi)
+        # filtered results carry no mset (parity with MGARCHResult.filter),
+        # so they count only the dependence parameters
+        k = len(self.psi)
+        if self.mset is not None:
+            k += self.mset.total_params
+        return k
 
     @property
     def aic(self) -> float:
@@ -227,16 +307,20 @@ class CopulaGARCHResult:
         )
         if len(self.psi):
             lines.append("")
-            lines.append(f"{'param':<8}{'coef':>12}{'std err':>12}")
+            lines.append(f"{'param':<8}{'coef':>12}{'std err':>12}{'z':>10}")
             for j, name in enumerate(self.psi_names):
-                se = (
-                    f"{self.se[j]:>12.6f}"
-                    if self.se is not None and np.isfinite(self.se[j])
-                    else f"{'--':>12}"
-                )
-                lines.append(f"{name:<8}{self.psi[j]:>12.6f}{se}")
+                c = self.psi[j]
+                if self.se is not None and np.isfinite(self.se[j]) and self.se[j] > 0:
+                    z = c / self.se[j]
+                    lines.append(f"{name:<8}{c:>12.6f}{self.se[j]:>12.6f}{z:>10.3f}")
+                else:
+                    lines.append(f"{name:<8}{c:>12.6f}{'--':>12}{'--':>10}")
             if self.se_method:
                 lines.append(f"Covariance: {self.se_method}")
+            if self.se_method == "stage2-robust":
+                lines.append(
+                    "  (marginal estimation error ignored; see docs on inference)"
+                )
         if not self.converged:
             lines.append(f"WARNING: optimizer did not converge: {self.message}")
         if self.filtered:
@@ -257,7 +341,7 @@ class CopulaGARCHResult:
                 "simulation requires parametric margins (empirical quantile "
                 "inversion is not implemented)"
             )
-        if self.filtered:
+        if self.filtered or self.mset is None:
             raise NotImplementedError("simulate from the fitted result instead")
         rng = np.random.default_rng(seed)
         N = self.nassets
@@ -268,16 +352,26 @@ class CopulaGARCHResult:
         states = [self.mset.sim_state(i) for i in range(N)]
         u_lags = [np.tile(st[0][:, None], (1, n_paths)) for st in states]
         s2_lags = [np.tile(st[1][:, None], (1, n_paths)) for st in states]
+        cop_dist = "norm" if nu is None else "t"
         if self.dynamics == "dcc":
             Q = np.tile(self.q_last[None, :, :], (n_paths, 1, 1))
             eta_prev = np.tile(self.eta[-1][None, :], (n_paths, 1))
             omega = (1.0 - a - b) * self.Sbar
+        else:
+            chol_static = np.linalg.cholesky(self.R[0])
         rets = np.empty((horizon, n_paths, N))
         covs = np.empty((horizon, N, N))
-        marg_dists = [
-            (type(r.model.distribution).__name__, np.asarray(r.params)[-1])
-            for r in self.mset.results
-        ]
+        marg_dists = []
+        for r in self.mset.results:
+            dname = type(r.model.distribution).__name__
+            if dname == "Normal":
+                marg_dists.append(("Normal", None))
+            elif dname == "StudentsT":
+                marg_dists.append(("StudentsT", float(np.asarray(r.params)[-1])))
+            else:
+                raise NotImplementedError(
+                    f"simulation not implemented for arch distribution {dname!r}"
+                )
         for h in range(horizon):
             sig2 = np.empty((n_paths, N))
             for i, (vol_p, p, o, q) in enumerate(fams):
@@ -296,16 +390,12 @@ class CopulaGARCHResult:
                 Q = omega[None, :, :] + a * outer + b * Q
                 d = np.sqrt(np.einsum("mii->mi", Q))
                 Rm = Q / np.einsum("mi,mj->mij", d, d)
-            eta_new = np.empty((n_paths, N))
-            for m in range(n_paths):
-                Rmat = Rm[m] if self.dynamics == "dcc" else self.R[0]
-                chol = np.linalg.cholesky(Rmat)
-                z = chol @ rng.standard_normal(N)
-                if nu is None:
-                    eta_new[m] = z
-                else:
-                    w = rng.chisquare(nu)
-                    eta_new[m] = z * np.sqrt((nu - 2.0) / w)
+                eta_new = np.empty((n_paths, N))
+                for m in range(n_paths):
+                    chol = np.linalg.cholesky(Rm[m])
+                    eta_new[m] = sample_standardized(rng, chol, 1, cop_dist, nu)[0]
+            else:
+                eta_new = sample_standardized(rng, chol_static, n_paths, cop_dist, nu)
             # copula shocks -> uniforms -> marginal standardized residuals
             if nu is None:
                 u_sim = stats.norm.cdf(eta_new)
@@ -317,11 +407,17 @@ class CopulaGARCHResult:
                 if dname == "Normal":
                     eps[:, i] = stats.norm.ppf(u_sim[:, i])
                 else:
-                    eps[:, i] = _std_t_ppf(u_sim[:, i], float(dparam))
+                    eps[:, i] = _std_t_ppf(u_sim[:, i], dparam)
             mu = np.array([self.mset.mean_offset(i) for i in range(N)])
             u_ret = np.sqrt(sig2) * eps
             rets[h] = mu + u_ret
-            covs[h] = np.cov(u_ret.T)
+            # analytic covariance aggregation (finite for n_paths=1, unlike
+            # a sample covariance across paths)
+            sig = np.sqrt(sig2)
+            if self.dynamics == "dcc":
+                covs[h] = np.einsum("mij,mi,mj->ij", Rm, sig, sig) / n_paths
+            else:
+                covs[h] = self.R[0] * (sig.T @ sig) / n_paths
             for i in range(N):
                 if u_lags[i].shape[0] > 0:
                     u_lags[i] = np.vstack([u_ret[None, :, i], u_lags[i][:-1]])
@@ -343,6 +439,8 @@ class CopulaGARCHResult:
 
     def filter(self, returns) -> CopulaGARCHResult:
         """Apply fitted marginal and copula parameters to new returns."""
+        if self.mset is None:
+            raise ValueError("filtering requires the fitted marginals")
         y, names, index = _coerce_returns(returns)
         if y.shape[1] != self.nassets:
             raise ValueError(f"expected {self.nassets} columns, got {y.shape[1]}")
@@ -353,40 +451,38 @@ class CopulaGARCHResult:
             resid[:, i] = r
             sigma[:, i] = s
         eps = resid / sigma
+        a, b, nu = self._coefs()
         if self.margins == "parametric":
             u = pit_parametric(self.mset, eps)
+            eta = _eta_parametric(self.mset, eps, self.copula, nu)
         else:
-            u = pit_empirical(eps)
-        a, b, nu = self._coefs()
-        eta = _eta_from_u(u, self.copula, nu)
+            # map new residuals through the TRAINING sample's ECDF so the
+            # filter evaluates the FITTED copula; re-ranking the new sample
+            # would make u depend on the window (u = 0.5 for a single row)
+            train = self.mset.std_resid
+            Tt = train.shape[0]
+            u = np.empty_like(eps)
+            for i in range(eps.shape[1]):
+                srt = np.sort(train[:, i])
+                u[:, i] = np.searchsorted(srt, eps[:, i], side="right") / (Tt + 1.0)
+            u = np.clip(u, 1.0 / (Tt + 1.0), Tt / (Tt + 1.0))
+            eta = _eta_from_u(u, self.copula, nu)
         if self.dynamics == "dcc":
-            path = dcc_path(eta, a, b, 0.0, self.Sbar, None)
-            if not path.ok:
+            llt_c, path = _copula_llt_dynamic(
+                eta, a, b, nu, Sbar=self.Sbar, return_path=True
+            )
+            if llt_c is None:
                 raise RuntimeError("copula correlation recursion failed on new data")
-            N = eta.shape[1]
-            if nu is None:
-                joint = mvnorm_llt(path.logdet, path.quad, N)
-                margins = stats.norm.logpdf(eta).sum(axis=1)
-            else:
-                joint = mvt_llt(path.logdet, path.quad, nu, N)
-                margins = _std_t_logpdf(eta, nu).sum(axis=1)
-            llt_c = joint - margins
             R, q_last = path.R, path.q_last
         else:
             llt_c = _copula_llt_static(eta, self.R[0], nu)
             R = np.tile(self.R[0][None, :, :], (eta.shape[0], 1, 1))
             q_last = None
-        # marginal per-obs lls on the new data (fitted params, new paths)
+        # marginal per-obs lls on the new data (fitted params, new paths),
+        # through arch's own distributions -- works for every marginal dist
         ll1 = np.zeros(eta.shape[0])
         for i in range(self.nassets):
-            dist_name = type(self.mset.results[i].model.distribution).__name__
-            if dist_name == "Normal":
-                ll1 += stats.norm.logpdf(eps[:, i]) - np.log(sigma[:, i])
-            elif dist_name == "StudentsT":
-                nu_i = float(np.asarray(self.mset.results[i].params)[-1])
-                ll1 += _std_t_logpdf(eps[:, i], nu_i) - np.log(sigma[:, i])
-            else:  # pragma: no cover
-                raise NotImplementedError
+            ll1 += self.mset.per_obs_loglik_on(i, resid[:, i], sigma[:, i])
         llt = ll1 + llt_c
         return CopulaGARCHResult(
             copula=self.copula,
@@ -394,7 +490,7 @@ class CopulaGARCHResult:
             margins=self.margins,
             names=names or self.names,
             index=index,
-            mset=self.mset,
+            mset=None,
             u=u,
             eta=eta,
             R=R,
@@ -435,10 +531,15 @@ class CopulaGARCH:
     and Student-t supported) or "empirical" (rank-based).
 
     Standard errors: computed for dynamics="dcc" with parametric margins via
-    the same two-stage sandwich as DCC; for Student-t margins the PIT's
-    dependence on the marginal shape parameter is held fixed (documented
-    approximation). Empirical margins are rank-based, hence non-smooth in the
-    marginal parameters, so compute_se is rejected there.
+    the same two-stage sandwich as DCC, with the correlation target held
+    fixed at its point estimate (the same convention as the DCC sandwich and
+    rmgarch). For other configurations compute_se downgrades to a warning:
+    the empirical PIT is rank-based (not differentiable in the marginal
+    parameters) and static-copula SEs are not implemented.
+
+    Targeting: the DCC recursion on the copula shocks targets their centered
+    covariance (rmgarch's cgarch convention, Qbar = cov(Z)), which is what
+    the replication fixtures validate against.
     """
 
     def __init__(
@@ -460,9 +561,27 @@ class CopulaGARCH:
     # psi layouts: dcc-gaussian (a,b); dcc-t (a,b,nu); static-gaussian ();
     # static-t (nu,)
 
-    def fit(self, returns, marginals=None, compute_se: bool = False):
+    def fit(self, returns, marginals=None, compute_se: bool = True):
         mset, names, index = _build_marginals(returns, marginals)
         eps = mset.std_resid
+        # validate SE availability up front (before any estimation work)
+        if compute_se and self.margins == "empirical":
+            warnings.warn(
+                "standard errors are unavailable with empirical margins "
+                "(the rank PIT is not differentiable in the marginal "
+                "parameters); returning se=None",
+                UserWarning,
+                stacklevel=2,
+            )
+            compute_se = False
+        if compute_se and self.dynamics == "static":
+            warnings.warn(
+                "standard errors for static copulas are not implemented; "
+                "returning se=None",
+                UserWarning,
+                stacklevel=2,
+            )
+            compute_se = False
         u = (
             pit_parametric(mset, eps)
             if self.margins == "parametric"
@@ -475,13 +594,30 @@ class CopulaGARCH:
 
         studentt = self.copula == "t"
 
+        # copula shocks and their targeting covariance depend only on nu:
+        # constant for the gaussian copula, memoized per nu for the t copula
+        # (SLSQP leaves nu unchanged in most FD evaluations)
+        shock_cache: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+
+        def shocks_at(nu_: float | None) -> tuple[np.ndarray, np.ndarray]:
+            key = -1.0 if nu_ is None else nu_
+            if key not in shock_cache:
+                if len(shock_cache) > 8:
+                    shock_cache.clear()
+                if self.margins == "parametric":
+                    eta_ = _eta_parametric(mset, eps, self.copula, nu_)
+                else:
+                    eta_ = _eta_from_u(u, self.copula, nu_)
+                shock_cache[key] = (eta_, np.cov(eta_.T))
+            return shock_cache[key]
+
         def negll(x: np.ndarray) -> float:
             a_, b_ = float(x[0]), float(x[1])
             nu_ = float(x[2]) if studentt else None
             if a_ < 0 or b_ < 0 or a_ + b_ >= 1.0 or (studentt and nu_ <= 2.05):
                 return _PENALTY
-            eta_ = _eta_from_u(u, self.copula, nu_)
-            llt = _copula_llt_dynamic(eta_, a_, b_, nu_)
+            eta_, Sbar_ = shocks_at(nu_)
+            llt = _copula_llt_dynamic(eta_, a_, b_, nu_, Sbar=Sbar_)
             if llt is None or not np.all(np.isfinite(llt)):
                 return _PENALTY
             return -float(np.sum(llt))
@@ -507,10 +643,14 @@ class CopulaGARCH:
                 best = r
         a, b = float(best.x[0]), float(best.x[1])
         nu = float(best.x[2]) if studentt else None
-        eta = _eta_from_u(u, self.copula, nu)
-        Sbar = cov2cor(eta.T @ eta / T)
-        path = dcc_path(eta, a, b, 0.0, Sbar, None)
-        llt_c = _copula_llt_dynamic(eta, a, b, nu)
+        eta, Sbar = shocks_at(nu)
+        llt_c, path = _copula_llt_dynamic(eta, a, b, nu, Sbar=Sbar, return_path=True)
+        if llt_c is None:
+            raise RuntimeError(
+                "copula stage-2 estimation failed: the optimizer terminated "
+                f"at an infeasible point {best.x} ({best.message}); check for "
+                "collinear or degenerate return columns"
+            )
         ll1 = np.zeros(T)
         for i in range(mset.nassets):
             ll1 += mset.per_obs_loglik(i)
@@ -538,12 +678,6 @@ class CopulaGARCH:
             message=str(best.message),
         )
         if compute_se:
-            if self.margins != "parametric":
-                raise ValueError(
-                    "compute_se requires parametric margins: the empirical "
-                    "PIT is rank-based and not differentiable in the "
-                    "marginal parameters"
-                )
             result_se = self._sandwich(mset, result)
             result.vcov = result_se["vcov"]
             result.se = result_se["se"]
@@ -552,9 +686,16 @@ class CopulaGARCH:
 
     def _fit_static(self, mset, names, index, eps, u):
         T, _N = u.shape
+
+        def eta_at(nu_: float | None) -> np.ndarray:
+            if self.margins == "parametric":
+                return _eta_parametric(mset, eps, self.copula, nu_)
+            return _eta_from_u(u, self.copula, nu_)
+
+        converged, message = True, ""
         if self.copula == "gaussian":
-            eta = stats.norm.ppf(u)
-            R = cov2cor(eta.T @ eta / T)
+            eta = eta_at(None)
+            R = _pd_correlation(cov2cor(eta.T @ eta / T))
             nu = None
             psi = np.empty(0)
             psi_names: list[str] = []
@@ -565,16 +706,19 @@ class CopulaGARCH:
                 nu_ = float(nu_arr[0])
                 if nu_ <= 2.05:
                     return _PENALTY
-                eta_ = _std_t_ppf(u, nu_)
-                return -float(np.sum(_copula_llt_static(eta_, R, nu_)))
+                llt = _copula_llt_static(eta_at(nu_), R, nu_)
+                if not np.all(np.isfinite(llt)):
+                    return _PENALTY
+                return -float(np.sum(llt))
 
             r = minimize(
                 neg, np.array([10.0]), method="L-BFGS-B", bounds=[(2.1, 300.0)]
             )
             nu = float(r.x[0])
-            eta = _std_t_ppf(u, nu)
+            eta = eta_at(nu)
             psi = np.array([nu])
             psi_names = ["nu"]
+            converged, message = bool(r.success), str(r.message)
         llt_c = _copula_llt_static(eta, R, nu)
         ll1 = np.zeros(T)
         for i in range(mset.nassets):
@@ -596,24 +740,38 @@ class CopulaGARCH:
             llt=llt,
             llt_copula=llt_c,
             Sbar=R,
+            converged=converged,
+            message=message,
         )
 
     def _sandwich(self, mset: MarginalSet, result: CopulaGARCHResult) -> dict:
         copula = self.copula
-        margins_kind = self.margins
+        # hold the correlation target fixed at its point estimate, matching
+        # the DCC sandwich's (and rmgarch's) fixed-targeting convention
+        Sbar = result.Sbar
+        # eta depends only on (eps, nu); the FD loops in two_stage_vcov
+        # re-evaluate the same few eps matrices many times, so memoize
+        shock_cache: dict[tuple, np.ndarray] = {}
 
         def llt_fn(psi: np.ndarray, eps: np.ndarray):
             a_, b_ = float(psi[0]), float(psi[1])
             nu_ = float(psi[2]) if copula == "t" else None
-            if a_ < 0 or b_ < 0 or a_ + b_ >= 1.0:
+            if (
+                a_ < 0
+                or b_ < 0
+                or a_ + b_ >= 1.0
+                or (nu_ is not None and nu_ <= 2.05)
+            ):
                 return None
-            u_ = (
-                pit_parametric(mset, eps)
-                if margins_kind == "parametric"
-                else pit_empirical(eps)
-            )
-            eta_ = _eta_from_u(u_, copula, nu_)
-            return _copula_llt_dynamic(eta_, a_, b_, nu_)
+            key = (hash(eps.tobytes()), -1.0 if nu_ is None else nu_)
+            if key not in shock_cache:
+                if len(shock_cache) > 64:
+                    shock_cache.clear()
+                shock_cache[key] = _eta_parametric(mset, eps, copula, nu_)
+            llt = _copula_llt_dynamic(shock_cache[key], a_, b_, nu_, Sbar=Sbar)
+            if llt is None or not np.all(np.isfinite(llt)):
+                return None
+            return llt
 
         layout = ParamLayout(asymmetric=False, studentt=copula == "t")
         fitlike = _FitShim(result.psi, layout, result.Sbar)

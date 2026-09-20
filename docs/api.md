@@ -11,6 +11,12 @@
 
 .. autoclass:: pymgarch.CCC
    :members:
+
+.. autoclass:: pymgarch.GOGARCH
+   :members:
+
+.. autoclass:: pymgarch.CopulaGARCH
+   :members:
 ```
 
 ## Marginals

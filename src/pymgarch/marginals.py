@@ -167,6 +167,20 @@ class MarginalSet:
         _, _, llt = self._recompute(i, params)
         return llt
 
+    def per_obs_loglik_on(self, i: int, resids: np.ndarray, sigma: np.ndarray) -> np.ndarray:
+        """Per-obs return log-likelihood of marginal i on NEW data at the
+        fitted parameters, through arch's own distribution (works for every
+        arch distribution, not just Normal/Student-t)."""
+        res = self.results[i]
+        n_mean, n_vol, _ = _param_split(res)
+        dist_p = self.full_params(i)[n_mean + n_vol :]
+        return np.asarray(
+            res.model.distribution.loglikelihood(
+                dist_p, np.asarray(resids, dtype=float), np.asarray(sigma, dtype=float) ** 2, individual=True
+            ),
+            dtype=float,
+        )
+
     def std_resid_at(self, i: int, params: np.ndarray) -> np.ndarray:
         resids, sigma2, _ = self._recompute(i, params)
         return resids / np.sqrt(sigma2)

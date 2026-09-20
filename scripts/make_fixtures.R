@@ -91,7 +91,10 @@ fit_cgarch <- function(time_varying) {
     sigma = unname(as.matrix(sigma(cfit))),
     resid = unname(as.matrix(residuals(cfit))),
     Qbar = tryCatch(unname(cfit@mfit$Qbar), error = function(e) NULL),
-    Rstatic = tryCatch(unname(cfit@mfit$Rt), error = function(e) NULL),
+    # mfit$Rt is a constant matrix only for the static fit; for the
+    # time-varying fit it is the full T-step correlation path (huge, unread)
+    Rstatic = if (!time_varying)
+      tryCatch(unname(cfit@mfit$Rt), error = function(e) NULL) else NULL,
     Rlast = if (!is.null(rc) && length(dim(rc)) == 3)
       unname(rc[, , dim(rc)[3]]) else NULL
   )

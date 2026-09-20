@@ -93,6 +93,12 @@ sim["returns"]                        # (h, n_paths, N) full predictive draws
 Copula forecasts are simulation-based (the copula gives full predictive
 distributions, not just second moments); rmgarch makes the same choice.
 
+Two conventions worth knowing: the dynamic copula recursion targets the
+centered covariance of the copula shocks (rmgarch's cgarch convention,
+validated by the replication fixtures), and copula shocks are computed with
+a tail-accurate survival-function transform so crash-scale residuals are
+not truncated by floating-point saturation of the PIT.
+
 ## Forecasting
 
 Marginal variance forecasts are delegated to arch. One-step correlations are

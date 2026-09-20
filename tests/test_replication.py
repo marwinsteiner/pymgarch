@@ -175,12 +175,20 @@ class TestCopulaLevel1:
         nu = float(entry["coefs"]["[Joint]mshape"])
         eta = _std_t_ppf(self._rmgarch_u(resid / sigma), nu)
         _T, N = eta.shape
-        path = dcc_path(eta, a, b, 0.0, np.cov(eta.T), None)
+        # the library's default target (centered covariance of the shocks)
+        # IS rmgarch's Qbar convention, so this validates the library path
+        Sbar = np.cov(eta.T)
+        path = dcc_path(eta, a, b, 0.0, Sbar, None)
         llc = float(
             (mvt_llt(path.logdet, path.quad, nu, N)
              - _std_t_logpdf(eta, nu).sum(axis=1)).sum()
         )
         joint = self._marginal_ll(sigma, resid) + llc
+        from pymgarch.copula import _copula_llt_dynamic
+
+        # library default-target evaluation must agree with the explicit one
+        lib = _copula_llt_dynamic(eta, a, b, nu)
+        assert float(np.sum(lib)) == pytest.approx(llc, abs=1e-8)
         assert joint == pytest.approx(float(entry["loglik"]), abs=0.05)
         assert np.allclose(
             path.R[-1], np.asarray(entry["Rlast"], dtype=float), atol=1e-4

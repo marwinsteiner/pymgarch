@@ -1,4 +1,7 @@
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 import pytest
 from conftest import SBAR
 
@@ -7,22 +10,44 @@ from pymgarch.copula import kendall_correlation, pit_empirical
 
 
 class TestGaussianCopulaEqualsDCC:
-    """A Gaussian copula with parametric normal margins IS the DCC model:
-    identical joint likelihood and identical stage-2 optimum."""
+    """A Gaussian copula with parametric normal margins IS the DCC model
+    (identical shocks: eta = eps exactly); the only difference is the
+    targeting convention (copula: centered covariance, rmgarch cgarch
+    parity; DCC: uncentered cov2cor), which is tiny in practice."""
 
-    def test_exact_equivalence(self, dcc_returns, dcc_fit):
-        cop = CopulaGARCH(copula="gaussian", dynamics="dcc").fit(dcc_returns)
-        assert cop.params["alpha"] == pytest.approx(
-            dcc_fit.params["alpha"], abs=1e-4
+    def test_equivalence_up_to_targeting(self, dcc_returns, dcc_fit):
+        cop = CopulaGARCH(copula="gaussian", dynamics="dcc").fit(
+            dcc_returns, compute_se=False
         )
-        assert cop.params["beta"] == pytest.approx(dcc_fit.params["beta"], abs=1e-3)
-        assert cop.loglikelihood == pytest.approx(dcc_fit.loglikelihood, abs=1e-3)
+        assert cop.params["alpha"] == pytest.approx(
+            dcc_fit.params["alpha"], abs=2e-3
+        )
+        assert cop.params["beta"] == pytest.approx(dcc_fit.params["beta"], abs=5e-3)
+        assert cop.loglikelihood == pytest.approx(dcc_fit.loglikelihood, abs=0.5)
+
+    def test_equivalence_survives_crash_scale_residuals(self):
+        # dji30ret contains Black Monday (|eps| ~ 11): the tail-accurate
+        # shock transform must NOT truncate these (a naive cdf->clip->ppf
+        # round trip caps |eta| near 7 and shifted alpha by -71% here)
+        csv = Path(__file__).parent / "fixtures" / "dji30ret_5.csv"
+        if not csv.exists():
+            pytest.skip("fixture CSV not available")
+        returns = pd.read_csv(csv)
+        from pymgarch import DCC
+
+        dcc = DCC().fit(returns, compute_se=False)
+        cop = CopulaGARCH(copula="gaussian", dynamics="dcc").fit(
+            returns, compute_se=False
+        )
+        assert abs(cop.eta).max() > 10.0  # crash shocks preserved
+        assert cop.params["alpha"] == pytest.approx(dcc.params["alpha"], abs=2e-3)
+        assert cop.loglikelihood == pytest.approx(dcc.loglikelihood, abs=0.5)
 
 
 class TestStudentTCopula:
     @pytest.fixture(scope="class")
     def tfit(self, t_returns):
-        return CopulaGARCH(copula="t", dynamics="dcc").fit(t_returns)
+        return CopulaGARCH(copula="t", dynamics="dcc").fit(t_returns, compute_se=False)
 
     def test_recovers_tail_dependence(self, tfit):
         assert 3.0 < tfit.params["nu"] < 30.0
@@ -30,7 +55,7 @@ class TestStudentTCopula:
         assert 0.5 < tfit.params["beta"] < 1.0
 
     def test_t_beats_gaussian_copula_on_t_data(self, tfit, t_returns):
-        gfit = CopulaGARCH(copula="gaussian", dynamics="dcc").fit(t_returns)
+        gfit = CopulaGARCH(copula="gaussian", dynamics="dcc").fit(t_returns, compute_se=False)
         assert tfit.loglikelihood > gfit.loglikelihood
 
     def test_correlation_paths_valid(self, tfit):
@@ -42,18 +67,24 @@ class TestStudentTCopula:
 
 class TestStaticCopulas:
     def test_static_gaussian_r_is_shock_correlation(self, dcc_returns):
-        res = CopulaGARCH(copula="gaussian", dynamics="static").fit(dcc_returns)
+        res = CopulaGARCH(copula="gaussian", dynamics="static").fit(
+            dcc_returns, compute_se=False
+        )
         assert res.psi.size == 0
         expected = np.corrcoef(res.eta.T)
         assert np.abs(res.R[0] - expected).max() < 0.01
         assert np.allclose(res.R[0], res.R[-1])
 
     def test_dynamic_beats_static_on_dcc_data(self, dcc_returns, dcc_fit):
-        static = CopulaGARCH(copula="gaussian", dynamics="static").fit(dcc_returns)
+        static = CopulaGARCH(copula="gaussian", dynamics="static").fit(
+            dcc_returns, compute_se=False
+        )
         assert dcc_fit.loglikelihood > static.loglikelihood
 
     def test_static_t_kendall_r_near_truth(self, t_returns):
-        res = CopulaGARCH(copula="t", dynamics="static").fit(t_returns)
+        res = CopulaGARCH(copula="t", dynamics="static").fit(
+            t_returns, compute_se=False
+        )
         assert res.psi_names == ["nu"]
         assert 3.0 < res.params["nu"] < 30.0
         assert np.abs(res.R[0] - SBAR).max() < 0.12
@@ -63,13 +94,22 @@ class TestMargins:
     def test_empirical_margins_run(self, dcc_returns):
         res = CopulaGARCH(
             copula="gaussian", dynamics="dcc", margins="empirical"
-        ).fit(dcc_returns)
+        ).fit(dcc_returns, compute_se=False)
         assert np.all((res.u > 0) & (res.u < 1))
         assert np.isfinite(res.loglikelihood)
 
-    def test_empirical_margins_reject_se(self, dcc_returns):
-        with pytest.raises(ValueError, match="empirical"):
-            CopulaGARCH(margins="empirical").fit(dcc_returns, compute_se=True)
+    def test_empirical_margins_warn_and_skip_se(self, dcc_returns):
+        with pytest.warns(UserWarning, match="empirical"):
+            res = CopulaGARCH(margins="empirical").fit(dcc_returns, compute_se=True)
+        assert res.std_errors is None
+
+    def test_static_dynamics_warn_and_skip_se(self, dcc_returns):
+        with pytest.warns(UserWarning, match="static"):
+            res = CopulaGARCH(copula="t", dynamics="static").fit(
+                dcc_returns, compute_se=True
+            )
+        assert res.std_errors is None
+        assert isinstance(res.converged, bool)
 
     def test_empirical_pit_is_uniform_ranks(self):
         x = np.random.default_rng(0).standard_normal((100, 2))
@@ -89,10 +129,20 @@ class TestInference:
         assert 1e-4 < se["alpha"] < 0.2
         assert 1e-4 < se["beta"] < 0.5
 
+    def test_sandwich_se_for_t_dcc(self, t_returns):
+        # exercises the nu column of the sandwich (previously untested)
+        res = CopulaGARCH(copula="t", dynamics="dcc").fit(
+            t_returns, compute_se=True
+        )
+        se = res.std_errors
+        assert se is not None
+        assert all(np.isfinite(v) and v > 0 for v in se.values())
+        assert se["nu"] < res.params["nu"]  # sane scale
+
 
 class TestSimulateAndFilter:
     def test_simulate_shapes_and_seed(self, t_returns):
-        res = CopulaGARCH(copula="t", dynamics="dcc").fit(t_returns)
+        res = CopulaGARCH(copula="t", dynamics="dcc").fit(t_returns, compute_se=False)
         sim1 = res.simulate(horizon=3, n_paths=200, seed=5)
         sim2 = res.simulate(horizon=3, n_paths=200, seed=5)
         assert sim1["returns"].shape == (3, 200, 3)
@@ -105,11 +155,48 @@ class TestSimulateAndFilter:
         assert np.all((ratio > 0.5) & (ratio < 2.0))
 
     def test_filter_on_training_data_reproduces_fit(self, t_returns):
-        res = CopulaGARCH(copula="t", dynamics="dcc").fit(t_returns)
+        res = CopulaGARCH(copula="t", dynamics="dcc").fit(t_returns, compute_se=False)
         flt = res.filter(t_returns)
         assert flt.filtered
         assert flt.loglikelihood == pytest.approx(res.loglikelihood, rel=1e-6)
         assert np.allclose(flt.R, res.R, atol=1e-10)
+
+    def test_empirical_filter_uses_training_ecdf(self, dcc_returns):
+        res = CopulaGARCH(margins="empirical").fit(dcc_returns, compute_se=False)
+        # a single filtered row must NOT collapse to u = 0.5 / eta = 0:
+        # the PIT maps through the training ECDF, not the new sample's ranks
+        flt = res.filter(dcc_returns.iloc[-1:])
+        assert not np.allclose(flt.eta, 0.0)
+        assert not np.allclose(flt.u, 0.5)
+        # filtering the training sample still reproduces the fitted u
+        flt_full = res.filter(dcc_returns)
+        assert np.allclose(flt_full.u, res.u, atol=1e-12)
+
+    def test_fit_raises_diagnostic_on_degenerate_data(self, dcc_returns):
+        dup = dcc_returns.copy()
+        dup["A2"] = dup["A"]  # collinear column -> singular target
+        with pytest.raises(RuntimeError, match="degenerate|infeasible"):
+            CopulaGARCH(copula="gaussian", dynamics="dcc").fit(
+                dup, compute_se=False
+            )
+
+    def test_static_gaussian_survives_degenerate_data(self, dcc_returns):
+        dup = dcc_returns.iloc[:300].copy()
+        dup["A2"] = dup["A"]
+        res = CopulaGARCH(copula="gaussian", dynamics="static").fit(
+            dup, compute_se=False
+        )
+        assert np.isfinite(res.loglikelihood)
+
+    def test_simulate_single_path_finite(self, t_returns):
+        res = CopulaGARCH(copula="t", dynamics="dcc").fit(t_returns, compute_se=False)
+        sim = res.simulate(horizon=2, n_paths=1, seed=9)
+        assert np.all(np.isfinite(sim["covariances"]))
+
+    def test_filtered_result_num_params_matches_dcc_convention(self, t_returns):
+        res = CopulaGARCH(copula="t", dynamics="dcc").fit(t_returns, compute_se=False)
+        flt = res.filter(t_returns)
+        assert flt.num_params == len(res.psi)
 
 
 def test_kendall_correlation_is_pd():
@@ -123,6 +210,8 @@ def test_kendall_correlation_is_pd():
 
 
 def test_summary_renders(dcc_returns):
-    res = CopulaGARCH(copula="gaussian", dynamics="dcc").fit(dcc_returns)
+    res = CopulaGARCH(copula="gaussian", dynamics="dcc").fit(
+        dcc_returns, compute_se=False
+    )
     text = res.summary()
     assert "Copula-GARCH" in text and "alpha" in text and "AIC" in text

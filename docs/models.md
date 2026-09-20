@@ -61,6 +61,89 @@ res.conditional_covariances
 res.forecast(horizon=10)          # analytic factor forecasts -> A D A'
 ```
 
+## Copula-GARCH (Patton 2006)
+
+Arch marginals, a probability integral transform to uniforms, and a Gaussian
+or Student-t copula with constant or DCC-driven correlation:
+
+$$
+\log f(r_t) = \sum_i \log f_i(r_{it}) + \log c(u_t; R_t).
+$$
+
+Margins are transformed either parametrically (through each marginal's
+fitted arch distribution; Normal and Student-t supported) or empirically
+(ranks, rescaled by $T/(T+1)$). The static t copula estimates $R$ by the
+Kendall-tau transform $\sin(\pi\tau/2)$ and $\nu$ by MLE; dynamic variants
+run the scalar DCC recursion on the copula shocks.
+
+The Student-t copula is parameterized through the covariance-standardized t
+family -- the same copula as the textbook one (copulas are invariant to
+monotone marginal rescaling), but the recursion inputs stay unit-variance
+and the existing DCC kernels apply unchanged. A useful corollary: a Gaussian
+copula with parametric normal margins reproduces plain DCC exactly, which
+the test suite asserts.
+
+```python
+res = mg.CopulaGARCH(copula="t", dynamics="dcc").fit(returns)
+res.copula_correlations               # (T, N, N)
+sim = res.simulate(horizon=10, n_paths=2000, seed=0)
+sim["returns"]                        # (h, n_paths, N) full predictive draws
+```
+
+Copula forecasts are simulation-based (the copula gives full predictive
+distributions, not just second moments); rmgarch makes the same choice.
+
+Two conventions worth knowing: the dynamic copula recursion targets the
+centered covariance of the copula shocks (rmgarch's cgarch convention,
+validated by the replication fixtures), and copula shocks are computed with
+a tail-accurate survival-function transform so crash-scale residuals are
+not truncated by floating-point saturation of the PIT.
+
+## Composite likelihood for large N
+
+`DCC(...).fit(returns, method="composite")` replaces the full N-dimensional
+stage-2 likelihood with the mean of bivariate pair likelihoods (Engle,
+Shephard and Sheppard 2008): each pair runs its own 2x2 recursion against
+the corresponding submatrices of the correlation targets, so an objective
+evaluation costs $O(TP)$ with $P$ pairs instead of an $N^3$ Cholesky per
+observation. `pairs="contiguous"` (default, $P = N-1$) follows the paper's
+recommendation for large cross-sections; `pairs="all"` uses every pair.
+
+Point estimates are consistent; standard errors use the composite scores in
+the two-stage sandwich (Godambe information); the reported joint likelihood
+is still evaluated on the full model so results stay comparable across
+methods. There is no packaged reference implementation in R or Python for
+this estimator (it exists in Sheppard's MATLAB MFE toolbox), so validation
+is against the full-likelihood estimator on moderate N plus simulation
+recovery.
+
+## Scalar and diagonal BEKK (Engle and Kroner 1995)
+
+The one model here that does not decompose into marginals plus correlation:
+the covariance is modeled directly on demeaned returns,
+
+$$
+H_t = C + (a a') \circ (u_{t-1} u_{t-1}') + (b b') \circ H_{t-1},
+$$
+
+the Hadamard form of diagonal BEKK ($A = \mathrm{diag}(a)$); scalar BEKK
+constrains $a$ to a common value. Variance targeting sets
+$C = \Sigma \circ (1 - aa' - bb')$ with $\Sigma$ the sample covariance,
+leaving only $(a, b)$ to estimate by Gaussian QML, with per-asset
+$a_i^2 + b_i^2 < 1$ constraints (which imply pairwise stationarity by
+Cauchy-Schwarz) and an explicit PSD check on $C$. Forecasts are closed form:
+$E[H_{T+h}] = C + (aa' + bb') \circ E[H_{T+h-1}]$.
+
+```python
+res = mg.BEKK("diagonal").fit(returns)
+res.conditional_covariances
+res.forecast(horizon=10)["covariances"]
+```
+
+Validation note: no maintained R reference exists for BEKK (mgarchBEKK is
+dead), so the test suite relies on simulation-recovery and closed-form
+forecast checks rather than cross-language fixtures.
+
 ## Forecasting
 
 Marginal variance forecasts are delegated to arch. One-step correlations are
@@ -74,6 +157,26 @@ and every model supports Monte Carlo forecasts (`method="simulation"`) that
 propagate the exact recursions; ADCC requires them. The analytic covariance
 assembly $\hat H = \hat D \hat R \hat D$ ignores a Jensen gap that the
 simulation method does not.
+
+## Diagnostics and post-estimation tools
+
+- `pymgarch.dcc_test(returns)` -- the Engle-Sheppard (2001) test of
+  constant conditional correlation: residuals are jointly whitened by
+  $\bar R^{-1/2}$ and stacked off-diagonal outer products are regressed on a
+  constant and lags; the statistic is $\chi^2(\text{lags}+1)$ under the
+  null. A small p-value motivates DCC-family dynamics. (rmgarch's `DCCtest`
+  deviates from the paper; pymgarch follows the paper, and the replication
+  suite asserts decision agreement.)
+- `result.news_impact(pair, kind)` -- one-step correlation/covariance
+  response surfaces over shock grids (rmgarch `nisurface`); GO-GARCH exposes
+  factor-shock surfaces.
+- `result.simulate(horizon, n_paths)` -- future return-path draws from the
+  fitted terminal state for DCC/ADCC/CCC and GO-GARCH (`dccsim` parity);
+  the copula result already had this.
+- Filtered results now forecast: `fit.filter(new_data).forecast(h)` iterates
+  the variance expectation from the filtered terminal state (identical to
+  the fitted forecast when filtering the training sample).
+- `CCC(dist="t")` -- Student-t CCC with $\nu$ by one-dimensional MLE.
 
 ## Reported likelihood
 

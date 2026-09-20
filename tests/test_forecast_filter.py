@@ -16,10 +16,11 @@ class TestFilter:
         with pytest.raises(ValueError, match="columns"):
             dcc_fit.filter(dcc_returns.iloc[:, :2])
 
-    def test_filtered_result_cannot_forecast(self, dcc_fit, dcc_returns):
+    def test_filtered_result_forecasts(self, dcc_fit, dcc_returns):
+        # v0.5.0: filtered results forecast from their own terminal state
         flt = dcc_fit.filter(dcc_returns)
-        with pytest.raises(NotImplementedError):
-            flt.forecast(horizon=2)
+        fc = flt.forecast(horizon=2)
+        assert np.all(np.isfinite(fc.covariances))
 
 
 class TestAnalyticForecast:

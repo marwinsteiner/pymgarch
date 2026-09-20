@@ -54,12 +54,17 @@ def _fd_column(func, x: np.ndarray, j: int, h: float) -> np.ndarray:
     raise RuntimeError(f"likelihood not evaluable near fitted parameter {j}")
 
 
-def two_stage_vcov(mset: MarginalSet, fit: Stage2Fit) -> dict:
+def two_stage_vcov(mset: MarginalSet, fit: Stage2Fit, llt_fn=None) -> dict:
     """Sandwich covariance of the stage-2 parameters.
 
     Returns {"vcov": (K_psi, K_psi), "se": (K_psi,), "method": str}.
     Falls back to a stage-2-only OPG sandwich with a warning if the stacked
     bread matrix is numerically singular.
+
+    llt_fn(psi, eps) -> per-obs stage-2 log-likelihood (or None if psi is
+    infeasible) can be supplied to reuse the sandwich for stage-2 objectives
+    other than the plain (A)DCC one (e.g. copula likelihoods); it defaults
+    to the (A)DCC stage-2 likelihood at fit's targets.
     """
     T = mset.nobs
     layout = fit.layout
@@ -69,8 +74,13 @@ def two_stage_vcov(mset: MarginalSet, fit: Stage2Fit) -> dict:
     psi_hat = fit.params
     eps_hat = mset.std_resid
 
-    def s2_llt(psi: np.ndarray, eps: np.ndarray):
-        return stage2_llt(psi, eps, fit.Sbar, fit.Nbar, layout)
+    if llt_fn is None:
+
+        def s2_llt(psi: np.ndarray, eps: np.ndarray):
+            return stage2_llt(psi, eps, fit.Sbar, fit.Nbar, layout)
+
+    else:
+        s2_llt = llt_fn
 
     # ---- per-observation scores G (T, K) --------------------------------
     G = np.zeros((T, K))

@@ -56,9 +56,11 @@ class TestCCC:
         assert ccc.R.shape == dcc_fit.R.shape
         assert np.allclose(ccc.R[0], ccc.R[-1])
 
-    def test_ccc_rejects_t(self):
-        with pytest.raises(NotImplementedError):
-            CCC(dist="t")
+    def test_ccc_accepts_t(self, dcc_returns):
+        # v0.5.0: Student-t CCC with nu by 1-d MLE
+        res = CCC(dist="t").fit(dcc_returns)
+        assert res.psi_names == ["nu"]
+        assert res.params["nu"] > 2.0
 
 
 class TestADCC:

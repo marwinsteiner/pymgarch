@@ -100,7 +100,9 @@ class MGARCHResult:
 
     def _dcc_coefs(self) -> tuple[float, float, float, float | None]:
         if self.layout is None:
-            return 0.0, 0.0, 0.0, None
+            # CCC: no dynamics; psi holds nu when dist="t"
+            nu = float(self.psi[0]) if self.psi_names == ["nu"] else None
+            return 0.0, 0.0, 0.0, nu
         return self.layout.unpack(self.psi)
 
     # -- forecasting -------------------------------------------------------
@@ -112,11 +114,6 @@ class MGARCHResult:
         n_paths: int = 1000,
         seed: int | None = None,
     ) -> MGARCHForecast:
-        if self.filtered:
-            raise NotImplementedError(
-                "forecasting from a filtered result is not supported in v0.1; "
-                "forecast from the fitted result instead"
-            )
         if self.mset is None:
             raise ValueError("forecasting requires the fitted marginals")
         if method == "analytic":
@@ -125,8 +122,35 @@ class MGARCHResult:
             return self._forecast_simulation(horizon, n_paths, seed)
         raise ValueError("method must be 'analytic' or 'simulation'")
 
+    def _term_states(self) -> list:
+        """Per-asset (u_lags, s2_lags) at the end of THIS result's sample."""
+        if self.filtered:
+            states = self.extras.get("term_state")
+            if states is None:
+                raise NotImplementedError(
+                    "this filtered result carries no terminal state "
+                    "(non-GARCH/GJR marginals); refit or use the fitted result"
+                )
+            return states
+        return [self.mset.sim_state(i) for i in range(self.nassets)]
+
     def _marginal_variance_forecasts(self, horizon: int) -> np.ndarray:
         out = np.empty((horizon, self.nassets))
+        if self.filtered:
+            # arch's forecast() is tied to the estimation sample; iterate the
+            # variance expectation from the filtered terminal state instead
+            states = self._term_states()
+            for i in range(self.nassets):
+                fam = self.mset.garch_family(i)
+                if fam is None:
+                    raise NotImplementedError(
+                        "filtered-result forecasts need GARCH/GJR marginals"
+                    )
+                vol_p, p, o, q = fam
+                out[:, i] = _expected_variance_path(
+                    vol_p, p, o, q, states[i][0], states[i][1], horizon
+                )
+            return out
         for i, res in enumerate(self.mset.results):
             fc = res.forecast(horizon=horizon, reindex=False)
             out[:, i] = np.asarray(fc.variance, dtype=float)[0]
@@ -170,7 +194,7 @@ class MGARCHResult:
             raise NotImplementedError(
                 f"simulation forecasts need GARCH/GJR marginals; not: {bad}"
             )
-        states = [self.mset.sim_state(i) for i in range(N)]
+        states = self._term_states()
         # replicate lag state across paths
         u_lags = [np.tile(st[0][:, None], (1, n_paths)) for st in states]
         s2_lags = [np.tile(st[1][:, None], (1, n_paths)) for st in states]
@@ -263,7 +287,7 @@ class MGARCHResult:
                 llt2 = mvnorm_llt(path.logdet, path.quad, ndim)
             logdet, quad, R, q_last = path.logdet, path.quad, path.R, path.q_last
         llt = llt2 - np.sum(np.log(sigma), axis=1)
-        return MGARCHResult(
+        result = MGARCHResult(
             model=self.model,
             dist=self.dist,
             names=names or self.names,
@@ -281,9 +305,136 @@ class MGARCHResult:
             loglikelihood=float(np.sum(llt)),
             llt=llt,
             q_last=q_last,
-            mset=None,
+            mset=self.mset,
             filtered=True,
         )
+        # terminal lag state from the NEW data, so filtered results can
+        # forecast; only possible for GARCH/GJR-family marginals
+        states = []
+        for i in range(self.nassets):
+            fam = self.mset.garch_family(i)
+            if fam is None:
+                states = None
+                break
+            _, p, o, q = fam
+            nlag = max(p, o, 1)
+            states.append(
+                (
+                    resid[-nlag:, i][::-1].copy(),
+                    (sigma[-max(q, 1):, i] ** 2)[::-1].copy(),
+                )
+            )
+        result.extras["term_state"] = states
+        return result
+
+    # -- simulation of future return paths ---------------------------------
+
+    def simulate(
+        self, horizon: int, n_paths: int = 1000, seed: int | None = None
+    ) -> dict:
+        """Simulate future return paths from the terminal state.
+
+        Returns {"returns": (h, n_paths, N), "variances": (h, n_paths, N)}.
+        Requires GARCH/GJR marginals (parity with rmgarch's dccsim).
+        """
+        if self.mset is None:
+            raise ValueError("simulation requires the fitted marginals")
+        a, b, g, nu = self._dcc_coefs()
+        N = self.nassets
+        rng = np.random.default_rng(seed)
+        fams = [self.mset.garch_family(i) for i in range(N)]
+        if any(f is None for f in fams):
+            raise NotImplementedError("simulate() needs GARCH/GJR marginals")
+        mu = np.array([self.mset.mean_offset(i) for i in range(N)])
+        states = self._term_states()
+        u_lags = [np.tile(st[0][:, None], (1, n_paths)) for st in states]
+        s2_lags = [np.tile(st[1][:, None], (1, n_paths)) for st in states]
+        constant_R = self.model == "CCC"
+        if not constant_R:
+            omega = (1.0 - a - b) * self.Sbar - g * self.Nbar
+            Q = np.tile(self.q_last[None, :, :], (n_paths, 1, 1))
+            eps_prev = np.tile(self.eps[-1][None, :], (n_paths, 1))
+        else:
+            chol_const = np.linalg.cholesky(self.Sbar)
+        rets = np.empty((horizon, n_paths, N))
+        sig2s = np.empty((horizon, n_paths, N))
+        for h in range(horizon):
+            sig2 = np.empty((n_paths, N))
+            for i, (vol_p, p, o, q) in enumerate(fams):
+                s2 = np.full(n_paths, vol_p[0])
+                for lag in range(p):
+                    s2 += vol_p[1 + lag] * u_lags[i][lag] ** 2
+                for lag in range(o):
+                    neg = u_lags[i][lag] < 0.0
+                    s2 += vol_p[1 + p + lag] * (u_lags[i][lag] ** 2) * neg
+                for lag in range(q):
+                    s2 += vol_p[1 + p + o + lag] * s2_lags[i][lag]
+                sig2[:, i] = s2
+            z = np.empty((n_paths, N))
+            if constant_R:
+                z = sample_standardized(rng, chol_const, n_paths, self.dist, nu)
+            else:
+                outer = np.einsum("mi,mj->mij", eps_prev, eps_prev)
+                Q = omega[None, :, :] + a * outer + b * Q
+                if g > 0.0:
+                    negs = np.minimum(eps_prev, 0.0)
+                    Q = Q + g * np.einsum("mi,mj->mij", negs, negs)
+                d = np.sqrt(np.einsum("mii->mi", Q))
+                Rm = Q / np.einsum("mi,mj->mij", d, d)
+                for m in range(n_paths):
+                    chol = np.linalg.cholesky(Rm[m])
+                    z[m] = sample_standardized(rng, chol, 1, self.dist, nu)[0]
+                eps_prev = z
+            u = np.sqrt(sig2) * z
+            rets[h] = mu + u
+            sig2s[h] = sig2
+            for i in range(N):
+                if u_lags[i].shape[0] > 0:
+                    u_lags[i] = np.vstack([u[None, :, i], u_lags[i][:-1]])
+                if s2_lags[i].shape[0] > 0:
+                    s2_lags[i] = np.vstack([sig2[None, :, i], s2_lags[i][:-1]])
+        return {"returns": rets, "variances": sig2s}
+
+    # -- news impact --------------------------------------------------------
+
+    def news_impact(
+        self,
+        pair: tuple[int, int] = (0, 1),
+        kind: str = "correlation",
+        grid: np.ndarray | None = None,
+    ) -> dict:
+        """News-impact surface of the one-step correlation or covariance.
+
+        Shocks eps_i = x, eps_j = y (all other assets at zero) hit the
+        recursion at its unconditional state Q = Sbar, rmgarch's nisurface
+        convention. Returns {"x", "y", "z"} with z[k, l] the response at
+        (x[k], y[l]). kind="covariance" scales by the mean conditional
+        volatilities of the pair.
+        """
+        if self.model == "CCC":
+            raise ValueError("CCC has no news impact: correlation is constant")
+        i, j = pair
+        a, b, g, _ = self._dcc_coefs()
+        if grid is None:
+            grid = np.linspace(-4.0, 4.0, 41)
+        omega = (1.0 - a - b) * self.Sbar - g * self.Nbar
+        z = np.empty((grid.shape[0], grid.shape[0]))
+        e = np.zeros(self.nassets)
+        for k, x in enumerate(grid):
+            for l, yv in enumerate(grid):
+                e[:] = 0.0
+                e[i] = x
+                e[j] = yv
+                Q = omega + a * np.outer(e, e) + b * self.Sbar
+                if g > 0.0:
+                    n = np.minimum(e, 0.0)
+                    Q = Q + g * np.outer(n, n)
+                z[k, l] = Q[i, j] / np.sqrt(Q[i, i] * Q[j, j])
+        if kind == "covariance":
+            z = z * float(self.sigma[:, i].mean() * self.sigma[:, j].mean())
+        elif kind != "correlation":
+            raise ValueError("kind must be 'correlation' or 'covariance'")
+        return {"x": grid.copy(), "y": grid.copy(), "z": z}
 
     # -- reporting ---------------------------------------------------------
 
@@ -324,6 +475,39 @@ class MGARCHResult:
             f"<MGARCHResult {self.model}-{self.dist} N={self.nassets} "
             f"T={self.nobs} ll={self.loglikelihood:.2f}>"
         )
+
+
+def _expected_variance_path(vol_p, p, o, q, u_lags, s2_lags, horizon):
+    """Iterated E[sigma^2_{T+h}] for a GARCH/GJR recursion from lag state.
+
+    Known lags use realized u^2 (and u^2 1[u<0]); expectation steps use
+    E[u^2] = E[sigma^2] and E[u^2 1[u<0]] = E[sigma^2]/2 (symmetric
+    innovations) -- the same convention as arch's analytic GJR forecasts.
+    """
+    nlag = max(p, o, 1)
+    # (value, is_expected) queues, most recent first
+    u2 = [(float(u_lags[k]) ** 2, False) for k in range(nlag)]
+    u2neg = [
+        (float(u_lags[k]) ** 2 if float(u_lags[k]) < 0.0 else 0.0, False)
+        for k in range(nlag)
+    ]
+    s2 = [float(s2_lags[k]) for k in range(max(q, 1))]
+    out = np.empty(horizon)
+    for h in range(horizon):
+        v = vol_p[0]
+        for lag in range(p):
+            val, _expected = u2[lag]
+            v += vol_p[1 + lag] * val
+        for lag in range(o):
+            val, _expected = u2neg[lag]
+            v += vol_p[1 + p + lag] * val
+        for lag in range(q):
+            v += vol_p[1 + p + o + lag] * s2[lag]
+        out[h] = v
+        u2 = [(v, True)] + u2[:-1]
+        u2neg = [(0.5 * v, True)] + u2neg[:-1]
+        s2 = [v] + s2[:-1]
+    return out
 
 
 def _constant_corr_eval(eps, R0, dist, nu):

@@ -57,19 +57,32 @@ class _DCCBase:
     def __init__(self, dist: str = "norm"):
         self.dist = _normalize_dist(dist)
 
-    def fit(self, returns, marginals=None, compute_se: bool = True) -> MGARCHResult:
+    def fit(
+        self,
+        returns,
+        marginals=None,
+        compute_se: bool = True,
+        method: str = "full",
+        pairs: str = "contiguous",
+    ) -> MGARCHResult:
         """Two-stage estimation: arch marginals, then correlation dynamics.
 
         returns : (T, N) DataFrame or ndarray of returns (percent scale
             recommended for optimizer health, matching arch's guidance).
         marginals : None (default GARCH(1,1)), a UnivariateSpec applied to
             every column, or a list of fitted arch ARCHModelResult objects.
-        compute_se : compute Engle-Sheppard two-stage standard errors.
+        compute_se : compute Engle-Sheppard two-stage standard errors. Under
+            composite estimation the sandwich uses the composite scores
+            (Godambe information).
+        method : "full" (N-dimensional likelihood) or "composite" (mean of
+            bivariate pair likelihoods, Engle-Shephard-Sheppard 2008) --
+            use composite for large cross-sections.
+        pairs : "contiguous" or "all"; only used with method="composite".
         """
         mset, names, index = _build_marginals(returns, marginals)
         eps = mset.std_resid
         layout = ParamLayout(asymmetric=self._asymmetric, studentt=self.dist == "t")
-        fit2 = fit_stage2(eps, layout)
+        fit2 = fit_stage2(eps, layout, method=method, pairs_scheme=pairs)
         a, b, g, _nu = layout.unpack(fit2.params)
         path = dcc_path(eps, a, b, g, fit2.Sbar, fit2.Nbar)
         if not path.ok:
@@ -97,8 +110,19 @@ class _DCCBase:
             converged=fit2.converged,
             message=fit2.message,
         )
+        result.extras["estimation_method"] = fit2.method
         if compute_se:
-            vc = two_stage_vcov(mset, fit2)
+            if fit2.method == "composite":
+                from .estimation import stage2_llt_composite
+
+                def llt_fn(psi, e, _f=fit2, _lay=layout):
+                    return stage2_llt_composite(
+                        psi, e, _f.Sbar, _f.Nbar, _lay, _f.pairs
+                    )
+
+                vc = two_stage_vcov(mset, fit2, llt_fn=llt_fn)
+            else:
+                vc = two_stage_vcov(mset, fit2)
             result.vcov = vc["vcov"]
             result.se = vc["se"]
             result.se_method = vc["method"]

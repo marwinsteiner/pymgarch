@@ -245,6 +245,7 @@ class CopulaGARCHResult:
     llt: np.ndarray  # per-obs joint (marginals + copula)
     llt_copula: np.ndarray
     Sbar: np.ndarray
+    sigma: np.ndarray | None = None  # (T, N) marginal conditional vols
     q_last: np.ndarray | None = None
     vcov: np.ndarray | None = None
     se: np.ndarray | None = None
@@ -276,6 +277,14 @@ class CopulaGARCHResult:
     @property
     def copula_correlations(self) -> np.ndarray:
         return self.R
+
+    @property
+    def conditional_covariances(self) -> np.ndarray:
+        """D_t R_t D_t with the copula correlation: exact under the Gaussian
+        copula, an approximation to the return covariance otherwise."""
+        if self.sigma is None:
+            raise ValueError("this result carries no marginal sigma path")
+        return np.einsum("tij,ti,tj->tij", self.R, self.sigma, self.sigma)
 
     @property
     def num_params(self) -> int:
@@ -500,6 +509,7 @@ class CopulaGARCHResult:
             llt=llt,
             llt_copula=llt_c,
             Sbar=self.Sbar,
+            sigma=sigma,
             q_last=q_last,
             filtered=True,
         )
@@ -673,6 +683,7 @@ class CopulaGARCH:
             llt=llt,
             llt_copula=llt_c,
             Sbar=Sbar,
+            sigma=mset.sigma,
             q_last=path.q_last,
             converged=bool(best.success),
             message=str(best.message),
@@ -740,6 +751,7 @@ class CopulaGARCH:
             llt=llt,
             llt_copula=llt_c,
             Sbar=R,
+            sigma=mset.sigma,
             converged=converged,
             message=message,
         )

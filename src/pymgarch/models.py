@@ -57,19 +57,32 @@ class _DCCBase:
     def __init__(self, dist: str = "norm"):
         self.dist = _normalize_dist(dist)
 
-    def fit(self, returns, marginals=None, compute_se: bool = True) -> MGARCHResult:
+    def fit(
+        self,
+        returns,
+        marginals=None,
+        compute_se: bool = True,
+        method: str = "full",
+        pairs: str = "contiguous",
+    ) -> MGARCHResult:
         """Two-stage estimation: arch marginals, then correlation dynamics.
 
         returns : (T, N) DataFrame or ndarray of returns (percent scale
             recommended for optimizer health, matching arch's guidance).
         marginals : None (default GARCH(1,1)), a UnivariateSpec applied to
             every column, or a list of fitted arch ARCHModelResult objects.
-        compute_se : compute Engle-Sheppard two-stage standard errors.
+        compute_se : compute Engle-Sheppard two-stage standard errors. Under
+            composite estimation the sandwich uses the composite scores
+            (Godambe information).
+        method : "full" (N-dimensional likelihood) or "composite" (mean of
+            bivariate pair likelihoods, Engle-Shephard-Sheppard 2008) --
+            use composite for large cross-sections.
+        pairs : "contiguous" or "all"; only used with method="composite".
         """
         mset, names, index = _build_marginals(returns, marginals)
         eps = mset.std_resid
         layout = ParamLayout(asymmetric=self._asymmetric, studentt=self.dist == "t")
-        fit2 = fit_stage2(eps, layout)
+        fit2 = fit_stage2(eps, layout, method=method, pairs_scheme=pairs)
         a, b, g, _nu = layout.unpack(fit2.params)
         path = dcc_path(eps, a, b, g, fit2.Sbar, fit2.Nbar)
         if not path.ok:
@@ -97,11 +110,22 @@ class _DCCBase:
             converged=fit2.converged,
             message=fit2.message,
         )
+        result.extras["estimation_method"] = fit2.method
+        if fit2.method == "composite":
+            result.extras["composite_pairs"] = pairs
         if compute_se:
-            vc = two_stage_vcov(mset, fit2)
+            # Stage2Fit.objective_llt is the objective actually maximized —
+            # composite or full — so the sandwich always differentiates the
+            # right estimator (Godambe information for composite)
+            vc = two_stage_vcov(mset, fit2, llt_fn=fit2.objective_llt)
             result.vcov = vc["vcov"]
             result.se = vc["se"]
-            result.se_method = vc["method"]
+            if fit2.method == "composite":
+                result.se_method = vc["method"].replace(
+                    "two-stage-robust", "composite-godambe"
+                ).replace("stage2-robust", "composite-godambe-stage2-robust")
+            else:
+                result.se_method = vc["method"]
         return result
 
 
@@ -120,22 +144,40 @@ class ADCC(_DCCBase):
 
 
 class CCC:
-    """Bollerslev (1990) constant conditional correlation (Gaussian)."""
+    """Bollerslev (1990) constant conditional correlation.
+
+    dist="t" adds a multivariate Student-t likelihood with the degrees of
+    freedom estimated by one-dimensional MLE at the fixed correlation.
+    """
 
     def __init__(self, dist: str = "norm"):
-        if _normalize_dist(dist) != "norm":
-            raise NotImplementedError("CCC supports the Gaussian likelihood only")
-        self.dist = "norm"
+        self.dist = _normalize_dist(dist)
 
     def fit(self, returns, marginals=None) -> MGARCHResult:
+        from scipy.optimize import minimize_scalar
+
         mset, names, index = _build_marginals(returns, marginals)
         eps = mset.std_resid
         Sbar, Nbar = correlation_targets(eps)
-        llt2, logdet, quad, R, q_last = _constant_corr_eval(eps, Sbar, "norm", None)
+        nu = None
+        psi = np.empty(0)
+        psi_names: list[str] = []
+        if self.dist == "t":
+            res = minimize_scalar(
+                lambda v: -float(
+                    np.sum(_constant_corr_eval(eps, Sbar, "t", v)[0])
+                ),
+                bounds=(2.1, 300.0),
+                method="bounded",
+            )
+            nu = float(res.x)
+            psi = np.array([nu])
+            psi_names = ["nu"]
+        llt2, logdet, quad, R, q_last = _constant_corr_eval(eps, Sbar, self.dist, nu)
         llt = llt2 - np.sum(np.log(mset.sigma), axis=1)
         return MGARCHResult(
             model="CCC",
-            dist="norm",
+            dist=self.dist,
             names=names,
             index=index,
             sigma=mset.sigma,
@@ -145,8 +187,8 @@ class CCC:
             quad=quad,
             Sbar=Sbar,
             Nbar=Nbar,
-            psi=np.empty(0),
-            psi_names=[],
+            psi=psi,
+            psi_names=psi_names,
             layout=None,
             loglikelihood=float(np.sum(llt)),
             llt=llt,

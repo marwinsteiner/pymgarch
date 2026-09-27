@@ -307,6 +307,7 @@ class MGARCHResult:
             q_last=q_last,
             mset=self.mset,
             filtered=True,
+            extras=dict(self.extras),  # keep estimation provenance
         )
         # terminal lag state from the NEW data, so filtered results can
         # forecast; only possible for GARCH/GJR-family marginals
@@ -460,10 +461,15 @@ class MGARCHResult:
                     lines.append(f"{name:<8}{c:>12.6f}{'--':>12}{'--':>10}")
             if self.se_method:
                 lines.append(f"Covariance: {self.se_method}")
-            if self.se_method == "stage2-robust":
+            if self.se_method and self.se_method.endswith("stage2-robust"):
                 lines.append(
                     "  (marginal estimation error ignored; see docs on inference)"
                 )
+        if self.extras.get("estimation_method") == "composite":
+            lines.append(
+                "Estimation: composite likelihood (pairwise); SEs are "
+                "Godambe-sandwich when shown"
+            )
         if not self.converged:
             lines.append(f"WARNING: optimizer did not converge: {self.message}")
         if self.filtered:

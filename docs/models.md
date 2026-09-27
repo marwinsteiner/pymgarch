@@ -137,7 +137,7 @@ $E[H_{T+h}] = C + (aa' + bb') \circ E[H_{T+h-1}]$.
 ```python
 res = mg.BEKK("diagonal").fit(returns)
 res.conditional_covariances
-res.forecast(horizon=10)["covariances"]
+res.forecast(horizon=10).covariances   # MGARCHForecast, family-wide contract
 ```
 
 Validation note: no maintained R reference exists for BEKK (mgarchBEKK is

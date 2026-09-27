@@ -29,6 +29,18 @@ matrix is numerically singular, the library falls back to a stage-2-only
 sandwich (labelled `stage2-robust`) and warns; those standard errors ignore
 marginal estimation error.
 
+Two further labels exist. Composite-likelihood fits report
+`composite-godambe`: the same stacked sandwich, but the stage-2 scores are
+those of the pairwise composite objective (Godambe information), which is
+the correct covariance for the estimator that was actually maximized. BEKK
+reports `qml-robust`: a single-stage QML sandwich (there is no marginal
+stage to stack) that holds the estimated mean and the targeting covariance
+fixed -- the same fixed-targets approximation the two-stage models make,
+which can understate SEs for very persistent processes. On boundary or
+singular optima BEKK SEs degrade to a pseudo-inverse sandwich
+(`qml-robust-pinv`) or NaN (`qml-robust (failed)`) with a warning; the fit
+itself always survives.
+
 ## Known approximations
 
 - Correlation targets $\bar S$ and $\bar N$ are held fixed at their point

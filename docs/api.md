@@ -17,6 +17,12 @@
 
 .. autoclass:: pymgarch.CopulaGARCH
    :members:
+
+.. autoclass:: pymgarch.BEKK
+   :members:
+
+.. autoclass:: pymgarch.BEKKResult
+   :members:
 ```
 
 ## Marginals
@@ -43,4 +49,6 @@
 
 ```{eval-rst}
 .. autofunction:: pymgarch.simulate_dcc
+
+.. autofunction:: pymgarch.simulate_bekk
 ```

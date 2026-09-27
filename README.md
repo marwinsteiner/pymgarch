@@ -72,16 +72,24 @@ res = mg.DCC().fit(returns, marginals=fitted)
 | ADCC (Cappiello-Engle-Sheppard 2006) | Gaussian, Student-t | two-stage QML, PSD-constrained targeting |
 | GO-GARCH (van der Weide 2002) | Gaussian or t factors | fastICA rotation + univariate factor fits |
 | Copula-GARCH (Patton 2006) | Gaussian or t copula, static or DCC | two-stage QML, parametric or empirical margins |
+| Scalar/diagonal BEKK (Engle-Kroner 1995) | Gaussian | direct QML with variance targeting |
 
-Standard errors are Engle-Sheppard (2001) two-stage sandwich estimates: the
-marginal and correlation scores are stacked so stage-2 uncertainty reflects
-stage-1 estimation error. Correlation targets are held fixed (same
-approximation rmgarch makes). If the stacked system is singular the library
-falls back to a stage-2-only sandwich and says so in `summary()`.
+For large cross-sections, DCC and ADCC accept `method="composite"` (Engle-
+Shephard-Sheppard pairwise composite likelihood), replacing the N-dimensional
+likelihood with O(N) bivariate recursions for the default contiguous pairs
+(O(N^2) with `pairs="all"`).
 
-## Roadmap
-
-- v0.4: composite likelihood for large cross-sections, scalar/diagonal BEKK
+Standard errors: the correlation-family models (DCC/ADCC/copula) use
+Engle-Sheppard (2001) two-stage sandwich estimates -- marginal and
+correlation scores stacked so stage-2 uncertainty reflects stage-1
+estimation error, with correlation targets held fixed (the same
+approximation rmgarch makes); if the stacked system is singular the library
+falls back to a stage-2-only sandwich and says so in `summary()`. Composite
+fits report Godambe-sandwich SEs labelled `composite-godambe`. BEKK is
+estimated in a single stage, so its SEs are a plain QML sandwich
+(`qml-robust`) that additionally holds the estimated mean and targeting
+covariance fixed; on boundary or degenerate optima it degrades to NaN SEs
+with a warning instead of failing the fit.
 
 ## License
 

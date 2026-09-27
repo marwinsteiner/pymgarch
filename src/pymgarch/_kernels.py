@@ -108,7 +108,7 @@ def dcc_recursion(eps, a, b, g, omega, qinit):
 
 
 @njit(cache=True)
-def bekk_recursion(u, avec, bvec, C, hinit):
+def bekk_recursion(u, avec, bvec, C, hinit, want_path):
     """Hadamard-form diagonal BEKK on demeaned returns u (T, N):
 
     H_t = C + (a a') o (u_{t-1} u_{t-1}') + (b b') o H_{t-1},  H_1 = hinit,
@@ -116,10 +116,13 @@ def bekk_recursion(u, avec, bvec, C, hinit):
     with o the elementwise product; avec = a * ones gives scalar BEKK.
     Returns (flag, llt, Hpath, H_last); flag != 0 on numerical failure.
     llt is the per-obs Gaussian log-likelihood of u_t given H_t.
+    want_path == 0 skips storing the (T, N, N) H path (objective/FD
+    evaluations need only llt; the full path is materialized twice per model
+    lifecycle, not thousands of times).
     """
     T, N = u.shape
     llt = np.empty(T)
-    Hpath = np.empty((T, N, N))
+    Hpath = np.empty((T if want_path == 1 else 1, N, N))
     H = hinit.copy()
     L = np.zeros((N, N))
     log2pi = np.log(2.0 * np.pi)
@@ -138,7 +141,8 @@ def bekk_recursion(u, avec, bvec, C, hinit):
             return 1, llt, Hpath, H
         ld, qd = _logdet_quad(L, u[t])
         llt[t] = -0.5 * (N * log2pi + ld + qd)
-        Hpath[t, :, :] = H
+        if want_path == 1:
+            Hpath[t, :, :] = H
     return 0, llt, Hpath, H
 
 

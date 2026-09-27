@@ -43,11 +43,18 @@ class TestCompositeDCC:
         # full-ML estimate maximizes it by construction
         assert dcc_fit.loglikelihood >= comp_fit.loglikelihood - 1e-6
 
-    def test_composite_ses_positive(self, comp_fit):
+    def test_composite_ses_positive_and_labeled(self, comp_fit):
         se = comp_fit.std_errors
         assert se is not None
         assert se["alpha"] > 0 and se["beta"] > 0
         assert comp_fit.extras["estimation_method"] == "composite"
+        # Godambe SEs must not masquerade as full two-stage SEs
+        assert comp_fit.se_method.startswith("composite-godambe")
+        assert "composite" in comp_fit.summary()
+
+    def test_provenance_survives_filter(self, comp_fit, dcc_returns):
+        flt = comp_fit.filter(dcc_returns)
+        assert flt.extras.get("estimation_method") == "composite"
 
     def test_contiguous_scheme_runs(self, dcc_returns):
         res = DCC().fit(
@@ -84,3 +91,36 @@ class TestCompositeADCC:
         )
         assert res.params["gamma"] > 0.01
         assert res.params["beta"] == pytest.approx(0.90, abs=0.12)
+
+    def test_adcc_composite_ses_end_to_end(self, adcc_returns):
+        # the previously untested path: composite Godambe SEs with the
+        # asymmetric layout (3 psi columns)
+        res = ADCC().fit(adcc_returns, method="composite", compute_se=True)
+        se = res.std_errors
+        assert se is not None
+        assert all(np.isfinite(v) and v > 0 for v in se.values())
+        assert res.se_method.startswith("composite-godambe")
+
+    def test_adcc_composite_never_discards_estimates(self, adcc_returns):
+        # the full-model delta binds the composite optimizer, so the
+        # post-optimization joint likelihood is always evaluable (the old
+        # post-hoc RuntimeError cliff is gone by construction)
+        res = ADCC().fit(adcc_returns, method="composite", compute_se=False)
+        assert np.isfinite(res.loglikelihood)
+
+
+class TestCompositeStudentT:
+    def test_t_composite_with_ses(self, t_returns):
+        from pymgarch import DCC
+
+        res = DCC(dist="t").fit(t_returns, method="composite", compute_se=True)
+        assert 3.0 < res.params["nu"] < 30.0
+        assert res.std_errors is not None
+        assert np.isfinite(res.std_errors["nu"])
+
+
+def test_composite_rejects_single_asset(dcc_returns):
+    from pymgarch import DCC
+
+    with pytest.raises(ValueError, match="two assets"):
+        DCC().fit(dcc_returns.iloc[:, :1], method="composite", compute_se=False)

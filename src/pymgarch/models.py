@@ -111,21 +111,21 @@ class _DCCBase:
             message=fit2.message,
         )
         result.extras["estimation_method"] = fit2.method
+        if fit2.method == "composite":
+            result.extras["composite_pairs"] = pairs
         if compute_se:
-            if fit2.method == "composite":
-                from .estimation import stage2_llt_composite
-
-                def llt_fn(psi, e, _f=fit2, _lay=layout):
-                    return stage2_llt_composite(
-                        psi, e, _f.Sbar, _f.Nbar, _lay, _f.pairs
-                    )
-
-                vc = two_stage_vcov(mset, fit2, llt_fn=llt_fn)
-            else:
-                vc = two_stage_vcov(mset, fit2)
+            # Stage2Fit.objective_llt is the objective actually maximized —
+            # composite or full — so the sandwich always differentiates the
+            # right estimator (Godambe information for composite)
+            vc = two_stage_vcov(mset, fit2, llt_fn=fit2.objective_llt)
             result.vcov = vc["vcov"]
             result.se = vc["se"]
-            result.se_method = vc["method"]
+            if fit2.method == "composite":
+                result.se_method = vc["method"].replace(
+                    "two-stage-robust", "composite-godambe"
+                ).replace("stage2-robust", "composite-godambe-stage2-robust")
+            else:
+                result.se_method = vc["method"]
         return result
 
 

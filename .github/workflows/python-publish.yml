@@ -57,16 +57,26 @@ jobs:
                         # fall back to the merge-commit message as notes
 
     - name: Create GitHub Release
-      # publish the annotated tag message as the release notes, read
-      # explicitly from the tag object (robust against gh's local-git
-      # fallback behavior); explicit --title keeps the bare tag name
+      # publish the annotated tag message as the release notes, read from
+      # the REMOTE tag object via the API: actions/checkout stores the tag
+      # peeled in this job, so any local-git read (%(contents),
+      # --notes-from-tag) silently returns the merge-commit message instead
       run: |
-        git tag -l --format='%(contents)' "${{ github.ref_name }}" > /tmp/notes
-        if [ ! -s /tmp/notes ]; then
-          echo "::error::tag ${{ github.ref_name }} has no annotation message"
+        REPO="${{ github.repository }}"
+        TAG="${{ github.ref_name }}"
+        TYPE=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.type)
+        SHA=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq .object.sha)
+        if [ "$TYPE" = "tag" ]; then
+          gh api "repos/$REPO/git/tags/$SHA" --jq .message > /tmp/notes
+        else
+          echo "::error::tag $TAG is lightweight; the release train creates annotated tags"
           exit 1
         fi
-        gh release create "${{ github.ref_name }}" --notes-file /tmp/notes --title "${{ github.ref_name }}"
+        if [ ! -s /tmp/notes ]; then
+          echo "::error::tag $TAG has no annotation message"
+          exit 1
+        fi
+        gh release create "$TAG" --notes-file /tmp/notes --title "$TAG"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
